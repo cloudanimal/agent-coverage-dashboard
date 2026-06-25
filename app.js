@@ -294,7 +294,7 @@ function buildMatrix(M, inScope){
     <div class="legend"><span><span class="sw" style="background:#1f9d57"></span>Covered</span><span><span class="sw" style="background:#b9770b"></span>Stale (&gt;${STATE.staleDays}d)</span><span><span class="sw" style="background:#7a3340"></span>Gap</span></div>
     <div class="scrollwrap"><table><thead><tr>
       <th data-s="name">Computer</th><th data-s="seg">Segment</th><th data-s="os">OS</th><th data-s="type">Type</th><th data-s="enabled">Enabled</th>
-      ${AGENTS.map(a=>`<th>${a[1]}</th>`).join('')}<th class="num" data-s="nAgents">Agents</th>
+      ${AGENTS.map(a=>`<th data-s="cov:${a[0]}">${a[1]}</th>`).join('')}<th class="num" data-s="nAgents">Agents</th>
     </tr></thead><tbody id="mxBody"></tbody></table></div></div>`;
   $('#dashboard').insertAdjacentHTML('beforeend', html);
   const fill = ()=>{
@@ -305,10 +305,12 @@ function buildMatrix(M, inScope){
       if(view==='gaps' && c.nAgents===AKEYS.length) return false;
       if(view==='none' && c.nAgents!==0) return false;
       if(view==='full' && c.nAgents!==AKEYS.length) return false;
-      if(view==='stale' && !['ten','me','cs'].some(k=>c.cov[k].stale)) return false;
+      if(view==='stale' && !AKEYS.some(k=>c.cov[k].stale)) return false;
       return true;
     });
-    if(STATE._sort){ const {k,dir}=STATE._sort; rows.sort((a,b)=>{ let x=a[k],y=b[k]; if(typeof x==='string'){x=x.toUpperCase();y=String(y).toUpperCase();} return (x>y?1:x<y?-1:0)*dir; }); }
+    if(STATE._sort){ const {k,dir}=STATE._sort;
+      const keyVal=c=>{ if(k.startsWith('cov:')){ const co=c.cov[k.slice(4)]; return co.present?(co.stale?1:2):0; } return c[k]; };
+      rows.sort((a,b)=>{ let x=keyVal(a),y=keyVal(b); if(typeof x==='string'){x=x.toUpperCase();y=String(y).toUpperCase();} return (x>y?1:x<y?-1:0)*dir; }); }
     $('#mxCount').textContent = rows.length.toLocaleString()+' of '+inScope.length.toLocaleString();
     $('#mxBody').innerHTML = rows.slice(0,2000).map(c=>`<tr>
       <td>${c.name}</td><td>${c.seg}</td><td style="font-size:12px">${c.os}</td><td>${c.type}</td>
@@ -318,16 +320,41 @@ function buildMatrix(M, inScope){
       + (rows.length>2000?`<tr><td colspan="9" class="sub">Showing first 2,000 of ${rows.length.toLocaleString()} — refine filters or export the full set.</td></tr>`:'');
   };
   ['mxSearch','mxView','mxSeg','mxOs','mxType'].forEach(id=>$('#'+id).addEventListener('input',fill));
-  $('#matrixPanel').querySelectorAll('th[data-s]').forEach(th=>th.addEventListener('click',()=>{
-    const k=th.dataset.s; STATE._sort = STATE._sort && STATE._sort.k===k ? {k,dir:-STATE._sort.dir} : {k,dir:1}; fill(); }));
+  $('#matrixPanel').querySelectorAll('th[data-s]').forEach(th=>{ th.style.cursor='pointer';
+    th.addEventListener('click',()=>{
+      const k=th.dataset.s; STATE._sort = STATE._sort && STATE._sort.k===k ? {k,dir:-STATE._sort.dir} : {k,dir:1};
+      $('#matrixPanel').querySelectorAll('th .sortind').forEach(s=>s.remove());
+      const ind=document.createElement('span'); ind.className='sortind'; ind.style.cssText='margin-left:4px;opacity:.7';
+      ind.textContent=STATE._sort.dir===1?'▲':'▼'; th.appendChild(ind); fill(); }); });
   STATE._matrixFill = fill; fill();
 }
 
 function buildOrphans(M){
   if(!M.orphans.length){ return; }
   const rows = M.orphans.slice(0,2000).map(o=>`<tr><td>${o.host}</td><td>${o.source}</td><td style="font-size:12px">${o.seen||''}</td></tr>`).join('');
-  $('#dashboard').insertAdjacentHTML('beforeend', `<div class="panel"><h3>Orphan agents <span class="sub">— reporting in but not found in Active Directory (decommissioned, renamed, or rogue)</span></h3>
+  $('#dashboard').insertAdjacentHTML('beforeend', `<div class="panel" id="orphanPanel"><h3>Orphan agents <span class="sub">— reporting in but not found in Active Directory (decommissioned, renamed, or rogue)</span></h3>
     <div class="scrollwrap"><table><thead><tr><th>Host</th><th>Source</th><th>Last seen</th></tr></thead><tbody>${rows}</tbody></table></div></div>`);
+  makeSortable($('#orphanPanel table'));
+}
+// ---------- clickable column-header sorting (generic, DOM-based) ----------
+function makeSortable(table){
+  if(!table || table._sortable) return; const thead=table.tHead, tbody=table.tBodies[0]; if(!thead||!tbody) return;
+  table._sortable=true; const ths=[...thead.rows[0].cells];
+  const numOf=s=>{ const n=parseFloat(String(s).replace(/[,$%\s]/g,'')); return isNaN(n)?null:n; };
+  ths.forEach((th,idx)=>{ if(th.dataset.nosort!==undefined) return; th.style.cursor='pointer'; if(!th.title) th.title='Sort';
+    th.addEventListener('click',()=>{
+      const dir = th._dir = (th._dir===1?-1:1);
+      ths.forEach(o=>{ if(o!==th){ o._dir=0; const s=o.querySelector('.sortind'); if(s) s.remove(); } });
+      let ind=th.querySelector('.sortind'); if(!ind){ ind=document.createElement('span'); ind.className='sortind'; ind.style.cssText='margin-left:4px;opacity:.7'; th.appendChild(ind); }
+      ind.textContent = dir===1?'▲':'▼';
+      const rows=[...tbody.rows]; const val=r=>{ const c=r.cells[idx]; return c? c.textContent.trim():''; };
+      const allNum=rows.length && rows.every(r=>{ const t=val(r); return t===''||t==='—'||numOf(t)!==null; });
+      rows.sort((a,b)=>{ let x=val(a),y=val(b);
+        if(allNum){ x=numOf(x); y=numOf(y); x=x==null?-Infinity:x; y=y==null?-Infinity:y; return (x-y)*dir; }
+        return (x.toUpperCase()>y.toUpperCase()?1:x.toUpperCase()<y.toUpperCase()?-1:0)*dir; });
+      rows.forEach(r=>tbody.appendChild(r));
+    });
+  });
 }
 
 // ---------- per-card save controls (PNG/JPEG/WEBP/GIF/clipboard image+text) ----------
