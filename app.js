@@ -124,7 +124,11 @@ function buildModel(){
     const key = norm(name);
     const toks = ouTokens(adField(r,[adDnCol]));
     const seg = toks.find(t=>/^bu[\s_-]?\d+$/i.test(t)) || toks.find(t=>!/^(servers?|workstations?|computers?)$/i.test(t)) || '—';
-    const type = toks.find(t=>/server/i.test(t)) ? 'Server' : (toks.find(t=>/workstation/i.test(t)) ? 'Workstation' : (/(server|linux)/i.test(adField(r,[adOsCol]))?'Server':'Workstation'));
+    const osStr = adField(r,[adOsCol])||'';
+    const type = /windows server/i.test(osStr) ? 'Windows Server'
+      : /windows (10|11|7|8)/i.test(osStr) ? 'Windows Workstation'
+      : /(red hat|rhel)/i.test(osStr) ? 'RHEL'
+      : 'Other';
     const enabledRaw = adField(r,[adEnCol]); const enabled = /true|1|yes/i.test(String(enabledRaw)) || enabledRaw===true;
     const os = adField(r,[adOsCol]) || '—';
     const cov = {};
@@ -248,13 +252,15 @@ const cell = c => c.present ? (c.stale? `<span class="pill stale" title="${Math.
 function buildMatrix(M, inScope){
   const segs=[...new Set(M.ad.map(c=>c.seg))].sort();
   const oses=[...new Set(M.ad.map(c=>c.os))].sort();
+  const TYPE_ORDER=['Windows Server','Windows Workstation','RHEL','Other'];
+  const types=TYPE_ORDER.filter(t=>M.ad.some(c=>c.type===t));
   const html = `<div class="panel" id="matrixPanel"><h3>Coverage matrix</h3>
     <div class="controls">
       <input id="mxSearch" placeholder="Search host…" style="min-width:160px">
       <select id="mxView"><option value="all">All in-scope</option><option value="gaps">Has a gap</option><option value="none">No coverage</option><option value="full">Fully covered</option><option value="stale">Any stale</option></select>
       <select id="mxSeg"><option value="">All segments</option>${segs.map(s=>`<option>${s}</option>`).join('')}</select>
       <select id="mxOs"><option value="">All OS</option>${oses.map(s=>`<option>${s}</option>`).join('')}</select>
-      <select id="mxType"><option value="">All types</option><option>Server</option><option>Workstation</option></select>
+      <select id="mxType"><option value="">All types</option>${types.map(t=>`<option>${t}</option>`).join('')}</select>
       <span class="sub" id="mxCount"></span>
     </div>
     <div class="legend"><span><span class="sw" style="background:#1f9d57"></span>Covered</span><span><span class="sw" style="background:#b9770b"></span>Stale (&gt;${STATE.staleDays}d)</span><span><span class="sw" style="background:#7a3340"></span>Gap</span></div>
