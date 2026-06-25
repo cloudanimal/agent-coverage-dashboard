@@ -176,6 +176,8 @@ function render(){
   const stale = k => inScope.filter(c=>c.cov[k].present && c.cov[k].stale).length;
   const fully = inScope.filter(c=>c.nAgents===AKEYS.length).length;
   const none  = inScope.filter(c=>c.nAgents===0).length;
+  const noEdr = inScope.filter(c=>!c.cov.cs.present).length;
+  const single= inScope.filter(c=>c.nAgents===1).length;
 
   const d = $('#dashboard'); d.innerHTML='';
   if(!STATE.built) window.scrollTo({top:0});   // only jump to top on the first build, not on filter re-renders
@@ -186,6 +188,8 @@ function render(){
   AGENTS.forEach(([k,label,c])=>{ const n=cov(k); cards += kpi(label+' coverage', pct(n,denom)+'%', `${fmt(n)} / ${fmt(denom)} · ${fmt(stale(k))} stale`, c); });
   cards += kpi('Fully covered', pct(fully,denom)+'%', `${fmt(fully)} on all ${AKEYS.length} agents`, 'var(--ok)');
   cards += kpi('No coverage', fmt(none), 'in-scope, 0 agents', none? 'var(--crit)':null);
+  cards += kpi('No EDR (CrowdStrike)', fmt(noEdr), pct(noEdr,denom)+'% of in-scope', noEdr? 'var(--crit)':null);
+  cards += kpi('Single-agent hosts', fmt(single), `only 1 of ${AKEYS.length} agents`, single? 'var(--warn)':null);
   cards += kpi('Orphan agents', fmt(M.orphans.length), 'agents with no AD match', M.orphans.length?'var(--warn)':null);
   d.insertAdjacentHTML('beforeend', `<div class="cards">${cards}</div>`);
 
@@ -207,9 +211,15 @@ function render(){
   d.insertAdjacentHTML('beforeend', `<div class="grid2">
     <div class="panel"><h3>Coverage by agent</h3><div class="chartbox"><canvas id="cAgent"></canvas></div></div>
     <div class="panel"><h3>Coverage by segment</h3><div class="chartbox"><canvas id="cSeg"></canvas></div></div>
+  </div>
+  <div class="grid2">
+    <div class="panel"><h3>Coverage by OS / type</h3><div class="chartbox"><canvas id="cType"></canvas></div></div>
+    <div class="panel"><h3>Coverage depth <span class="sub">— how many agents each host has</span></h3><div class="chartbox"><canvas id="cDepth"></canvas></div></div>
   </div>`);
   drawAgentChart(inScope, denom);
   drawSegChart(inScope);
+  drawTypeChart(inScope);
+  drawDepthChart(inScope);
 
   // coverage matrix
   buildMatrix(M, inScope);
@@ -245,6 +255,24 @@ function drawSegChart(inScope){
       data:segs.map(s=>{ const rows=inScope.filter(c=>c.seg===s); return pct(rows.filter(c=>c.cov[k].present).length, rows.length); }) }))},
     options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:chartTick()}},tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.parsed.y+'%'}}},
       scales:{x:{grid:{display:false},ticks:{color:chartTick()}},y:{max:100,grid:{color:chartGrid()},ticks:{color:chartTick(),callback:v=>v+'%'}}}}}));
+}
+function drawTypeChart(inScope){
+  const order=['Windows Server','Windows Workstation','RHEL','Other'];
+  const types=order.filter(t=>inScope.some(c=>c.type===t));
+  CHARTS.push(new Chart($('#cType'),{type:'bar',
+    data:{labels:types,datasets:AGENTS.map(([k,label,col])=>({label,backgroundColor:col,
+      data:types.map(t=>{ const rows=inScope.filter(c=>c.type===t); return pct(rows.filter(c=>c.cov[k].present).length, rows.length); }) }))},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:chartTick()}},tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.parsed.y+'%'}}},
+      scales:{x:{grid:{display:false},ticks:{color:chartTick()}},y:{max:100,grid:{color:chartGrid()},ticks:{color:chartTick(),callback:v=>v+'%'}}}}}));
+}
+function drawDepthChart(inScope){
+  const N=AKEYS.length; const labels=[]; const data=[]; const colors=[];
+  for(let i=0;i<=N;i++){ labels.push(i+(i===1?' agent':' agents')); data.push(inScope.filter(c=>c.nAgents===i).length);
+    colors.push(i===0?'#7a3340':i===N?'#1f9d57':i===1?'#b9770b':'#378add'); }
+  CHARTS.push(new Chart($('#cDepth'),{type:'bar',
+    data:{labels,datasets:[{label:'Hosts',data,backgroundColor:colors}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>fmt(c.parsed.y)+' hosts'}}},
+      scales:{x:{grid:{display:false},ticks:{color:chartTick()}},y:{grid:{color:chartGrid()},ticks:{color:chartTick()}}}}}));
 }
 
 // ---------- coverage matrix ----------
