@@ -39,7 +39,23 @@ function markLoaded(kind, name){ const slot=document.getElementById('slot-'+slot
   maybeAutoBuild(); }
 function markStatus(kind, msg){ document.getElementById('st-'+slotId(kind)).textContent=msg; }
 function slotId(k){ return k==='ten'?'ten':k; }   // ids match
-function maybeAutoBuild(){ if(STATE.ad.length){ /* AD is enough to start */ } }
+let _autoT=null;
+function maybeAutoBuild(){
+  if(STATE._loadingSample) return;                                   // loadSample renders once at the end
+  const hasAgent = AKEYS.some(k=>(STATE[k]||[]).length);
+  if(!STATE.ad.length || !hasAgent) return;                          // need AD + ≥1 agent
+  clearTimeout(_autoT); _autoT=setTimeout(()=>render(), 200);        // debounce multiple uploads
+}
+// collapse the uploader to a one-line summary after build; expand to edit
+function toggleUploader(expand){
+  document.getElementById('dropZone').style.display = expand ? '' : 'none';
+  document.getElementById('srcBar').classList.toggle('hidden', !!expand);
+  if(!expand){
+    const parts=[['ad','Active Directory'],['me','ManageEngine'],['ten','Tenable'],['cs','CrowdStrike'],['intune','Intune']]
+      .filter(([k])=>(STATE[k]||[]).length).map(([k,l])=>`${l} <span style="color:var(--ok)">✓</span> <span style="color:var(--muted)">${(STATE[k].length).toLocaleString()}</span>`);
+    document.getElementById('srcBarList').innerHTML = parts.join(' &nbsp;·&nbsp; ');
+  }
+}
 
 // ---------- AD JSON → flattened records ----------
 function flattenValue(v){ if(typeof v==='string'){ const m=v.match(/^\/Date\((-?\d+)\)\/$/); if(m) return new Date(+m[1]).toISOString(); } return v; }
@@ -158,7 +174,7 @@ function render(){
   const none  = inScope.filter(c=>c.nAgents===0).length;
 
   const d = $('#dashboard'); d.innerHTML='';
-  document.getElementById('uploader').scrollIntoView({block:'start'});
+  if(!STATE.built) window.scrollTo({top:0});   // only jump to top on the first build, not on filter re-renders
 
   // KPI cards
   const kpi = (l,v,s,col)=>`<div class="card"><div class="l">${l}</div><div class="v"${col?` style="color:${col}"`:''}>${v}</div>${s?`<div class="s">${s}</div>`:''}</div>`;
@@ -200,6 +216,7 @@ function render(){
   STATE.built = true; STATE._inScope = inScope; STATE._M = M;
   buildExportMenu();
   attachSaveControls();
+  toggleUploader(false);   // collapse the sources panel to a summary once built
 }
 
 function chartGrid(){ return getComputedStyle(document.documentElement).getPropertyValue('--line').trim()||'#2a2f3e'; }
@@ -351,6 +368,7 @@ if(/[?&]autosample=1/.test(location.search)) window.addEventListener('load', loa
 async function loadSample(){
   if(location.protocol==='file:'){ $('#loadHint').innerHTML='⚠️ Sample auto-load needs the page served over http (browsers block local file reads). Run <code>python3 -m http.server</code> here, or load your own files.'; return; }
   try{
+    STATE._loadingSample = true;
     showLoading('Loading sample data…'); await nextPaint();
     const [adTxt, meTxt, tenTxt, csTxt, intuneTxt] = await Promise.all([
       fetch('sample-data/ad-computers.json').then(r=>r.text()),
@@ -363,9 +381,10 @@ async function loadSample(){
     STATE.ten = Papa.parse(tenTxt,{header:true,skipEmptyLines:true}).data; STATE.src.ten='tenable-agents.csv'; markLoaded('ten','tenable-agents.csv (sample)');
     STATE.cs = Papa.parse(csTxt,{header:true,skipEmptyLines:true}).data; STATE.src.cs='crowdstrike.csv'; markLoaded('cs','crowdstrike.csv (sample)');
     STATE.intune = Papa.parse(intuneTxt,{header:true,skipEmptyLines:true}).data; STATE.src.intune='intune.csv'; markLoaded('intune','intune.csv (sample)');
+    STATE._loadingSample = false;
     showLoading('Building dashboard…'); await nextPaint(); render();
   }catch(e){ console.error(e); alert('Could not load sample (serve over http, or load files manually).'); }
-  finally{ hideLoading(); }
+  finally{ STATE._loadingSample=false; hideLoading(); }
 }
 
 // ---------- exports ----------
