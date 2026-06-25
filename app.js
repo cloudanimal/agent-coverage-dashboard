@@ -344,8 +344,19 @@ function cardToText(p){
 }
 function tsvToHtmlTable(tsv){ const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   return '<table>'+tsv.split('\n').map(l=>l===''?'<tr><td></td></tr>':'<tr>'+l.split('\t').map(c=>`<td>${esc(c)}</td>`).join('')+'</tr>').join('')+'</table>'; }
-function copyTable(tsv,msg){ if(window.ClipboardItem && navigator.clipboard?.write){
-    return navigator.clipboard.write([new ClipboardItem({'text/plain':new Blob([tsv],{type:'text/plain'}),'text/html':new Blob([tsvToHtmlTable(tsv)],{type:'text/html'})})]).then(()=>toast(msg),e=>{console.error(e);toast('Clipboard write failed');}); }
+function sectionsToHtmlTable(secs){ const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const cw=[]; const maxCols=Math.max(1,...secs.map(s=>Math.max(...s.aoa.map(r=>r.length))));
+  for(let i=0;i<maxCols;i++){ let m=4; secs.forEach(s=>s.aoa.forEach(r=>{ if(r[i]!=null){ const L=String(r[i]).length; if(L>m) m=L; } })); cw[i]=Math.min(Math.max(m*7+18,48),360); }
+  const colgroup='<colgroup>'+cw.map(w=>`<col style="width:${w}px">`).join('')+'</colgroup>';
+  const pad='<td style="border:0"></td>'; let rows='';
+  secs.forEach((s,si)=>{ if(si>0) rows+=`<tr><td colspan="${maxCols}" style="height:8px"></td></tr>`;
+    rows+=`<tr><td colspan="${maxCols}" style="font-weight:bold;background:#28415d;color:#fff;padding:5px 8px;white-space:nowrap">${esc(s.name)}</td></tr>`;
+    s.aoa.forEach((r,ri)=>{ const head=ri===0; const cells=r.map(c=>`<td style="${head?'font-weight:bold;background:#e9edf2;':''}padding:3px 8px;border:1px solid #c9cdd4;white-space:nowrap">${esc(c)}</td>`);
+      while(cells.length<maxCols) cells.push(pad); rows+='<tr>'+cells.join('')+'</tr>'; }); });
+  return `<table style="border-collapse:collapse;table-layout:fixed;font-family:-apple-system,Segoe UI,sans-serif;font-size:12px;color:#1b2530">${colgroup}${rows}</table>`; }
+function copyTable(tsv,msg,htmlOverride){ const html=htmlOverride||tsvToHtmlTable(tsv);
+  if(window.ClipboardItem && navigator.clipboard?.write){
+    return navigator.clipboard.write([new ClipboardItem({'text/plain':new Blob([tsv],{type:'text/plain'}),'text/html':new Blob([html],{type:'text/html'})})]).then(()=>toast(msg),e=>{console.error(e);toast('Clipboard write failed');}); }
   if(navigator.clipboard?.writeText) return navigator.clipboard.writeText(tsv).then(()=>toast(msg),()=>toast('Clipboard write failed'));
   toast('Clipboard not supported here'); return Promise.resolve(); }
 async function savePanel(el,name,fmt,btn){ const stamp=new Date().toISOString().slice(0,10);
@@ -416,30 +427,76 @@ function summaryAoa(){ const ad=STATE._inScope||[]; const denom=ad.length||1;
   r.push(['Orphan agents', (STATE._M.orphans||[]).length]);
   return r; }
 
-function buildExportMenu(){
-  const sel=$('#exportSel'); if(!sel) return;
+// every report section as {name, aoa} — drives the full-report exports
+function reportSections(){
+  const M=STATE._M, ad=STATE._inScope||[]; const denom=ad.length||1;
+  const aoaObjs=objs=>{ if(!objs||!objs.length) return [['(none)']]; const cols=[...new Set(objs.flatMap(o=>Object.keys(o)))]; return [cols, ...objs.map(o=>cols.map(c=>o[c]==null?'':o[c]))]; };
+  const byAgent=[['agent','covered','coverage_%','stale','gap']];
+  AGENTS.forEach(([k,l])=>{ const cov=ad.filter(c=>c.cov[k].present).length; byAgent.push([l,cov,pct(cov,denom),ad.filter(c=>c.cov[k].present&&c.cov[k].stale).length,denom-cov]); });
+  const segs=[...new Set(ad.map(c=>c.seg))].sort();
+  const bySeg=[['segment','computers',...AGENTS.map(a=>a[1]+' %')]];
+  segs.forEach(s=>{ const rows=ad.filter(c=>c.seg===s); bySeg.push([s,rows.length,...AGENTS.map(([k])=>pct(rows.filter(c=>c.cov[k].present).length,rows.length))]); });
+  const gaps=ad.filter(c=>c.nAgents<AKEYS.length).map(c=>({computer:c.name,segment:c.seg,os:c.os,type:c.type,missing:AGENTS.filter(([k])=>!c.cov[k].present).map(a=>a[1]).join('; '),agents:c.nAgents+'/'+AKEYS.length}));
+  return [
+    {name:'Summary', aoa:summaryAoa()},
+    {name:'Coverage by Agent', aoa:byAgent},
+    {name:'Coverage by Segment', aoa:bySeg},
+    {name:'Coverage Matrix', aoa:aoaObjs(matrixRows())},
+    {name:'Gaps', aoa:aoaObjs(gaps)},
+    {name:'Orphans', aoa:aoaObjs((M.orphans||[]).map(o=>({host:o.host,source:o.source,last_seen:o.seen})))},
+  ];
+}
+function reportHtml(stamp){
+  const bg=panelBg(); const src=$('#dashboard'); const live=src.querySelectorAll('canvas'); const clone=src.cloneNode(true);
+  clone.querySelectorAll('canvas').forEach((c,i)=>{ const l=live[i]; if(!l) return; const t=document.createElement('canvas'); t.width=l.width; t.height=l.height;
+    const x=t.getContext('2d'); x.fillStyle=bg; x.fillRect(0,0,t.width,t.height); x.drawImage(l,0,0); const img=document.createElement('img'); img.src=t.toDataURL('image/png'); img.style.width='100%'; c.replaceWith(img); });
+  clone.querySelectorAll('.savewrap,.noprint,select,button').forEach(e=>e.remove());
+  clone.querySelectorAll('input').forEach(inp=>{ const s=document.createElement('span'); s.textContent=inp.value; inp.replaceWith(s); });
+  const theme=document.documentElement.dataset.theme||'dark'; const styles=document.querySelector('style').outerHTML;
+  return `<!DOCTYPE html><html data-theme="${theme}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Agent Coverage Report — ${stamp}</title>${styles}</head><body><main style="padding:24px 28px"><h1>Agent Coverage Dashboard</h1><p class="sub">Generated ${stamp} · all analysis performed locally in-browser.</p>${clone.outerHTML}</main></body></html>`;
+}
+function reportMarkdown(stamp){ const ad=STATE._inScope||[]; const denom=ad.length||1;
+  let md=`# Agent Coverage Report\n\n_Generated ${stamp} · all analysis performed locally in-browser._\n\n`;
+  md+=`- AD computers in scope: **${denom.toLocaleString()}** (of ${STATE.ad.length.toLocaleString()})\n`;
+  AGENTS.forEach(([k,l])=>{ const n=ad.filter(c=>c.cov[k].present).length; md+=`- ${l} coverage: **${pct(n,denom)}%** (${n.toLocaleString()}/${denom.toLocaleString()}, ${ad.filter(c=>c.cov[k].present&&c.cov[k].stale).length} stale)\n`; });
+  md+=`- Fully covered: **${pct(ad.filter(c=>c.nAgents===AKEYS.length).length,denom)}%**\n- No coverage: **${ad.filter(c=>c.nAgents===0).length}**\n- Orphan agents: **${(STATE._M.orphans||[]).length}**\n`;
+  return md; }
+
+function buildExportMenu(){ const sel=$('#exportSel'); if(!sel) return;
   sel.innerHTML = [
-    ['matrix-csv','Coverage matrix (CSV)'],['full-xlsx','Full report (XLSX)'],
-    ['gaps-csv','Coverage gaps (CSV)'],['orphans-csv','Orphan agents (CSV)'],
-    ['flatad-csv','Flattened AD (CSV)']
+    ['report-html','Full report (HTML)'],['report-pdf','Full report (PDF / print)'],
+    ['full-csv','Full report (CSV)'],['full-xlsx','Full report (XLSX)'],
+    ['full-csv-clip','Full report (CSV → clipboard)'],['full-tsv-clip','Full report (Excel paste → clipboard)'],['full-img-clip','Full report (image → clipboard)'],
+    ['exec-md','Executive report (Markdown)'],
+    ['matrix-csv','Coverage matrix (CSV)'],['gaps-csv','Coverage gaps (CSV)'],['orphans-csv','Orphan agents (CSV)'],
+    ['metrics-json','Computed metrics (JSON)'],['flatad-csv','Flattened AD (CSV)']
   ].map(([v,l])=>`<option value="${v}">${l}</option>`).join('');
 }
 $('#exportBtn').addEventListener('click', ()=>{
   if(!STATE.built){ alert('Build the dashboard first.'); return; }
   const kind=$('#exportSel').value, stamp=new Date().toISOString().slice(0,10);
+  if(kind==='report-pdf'){ window.print(); return; }
+  if(kind==='report-html'){ dl(`agent_coverage_report_${stamp}.html`, reportHtml(stamp), 'text/html'); return; }
+  if(kind==='exec-md'){ dl(`agent_coverage_report_${stamp}.md`, reportMarkdown(stamp), 'text/markdown'); return; }
   if(kind==='flatad-csv'){ downloadFlatAd(); return; }
   if(kind==='matrix-csv'){ const m=matrixRows(); const c=objCols(m); dl(`coverage_matrix_${stamp}.csv`, toCsv(c, objRows(m,c)), 'text/csv'); return; }
   if(kind==='gaps-csv'){ const gaps=(STATE._inScope||[]).filter(c=>c.nAgents<AKEYS.length).map(c=>({computer:c.name,segment:c.seg,os:c.os,type:c.type,
       missing:AGENTS.filter(([k])=>!c.cov[k].present).map(a=>a[1]).join('; '), agents:c.nAgents+'/'+AKEYS.length}));
     const c=objCols(gaps); dl(`coverage_gaps_${stamp}.csv`, toCsv(c, objRows(gaps,c)), 'text/csv'); return; }
   if(kind==='orphans-csv'){ const o=STATE._M.orphans; const c=['host','source','seen']; dl(`orphan_agents_${stamp}.csv`, toCsv(c, o.map(x=>[x.host,x.source,x.seen])), 'text/csv'); return; }
-  if(kind==='full-xlsx'){
-    const wb=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryAoa()), 'Summary');
-    const m=matrixRows(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(m), 'Coverage Matrix');
-    const gaps=(STATE._inScope||[]).filter(c=>c.nAgents<AKEYS.length).map(c=>({computer:c.name,segment:c.seg,os:c.os,type:c.type,missing:AGENTS.filter(([k])=>!c.cov[k].present).map(a=>a[1]).join('; ')}));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(gaps.length?gaps:[{computer:'(none)'}]), 'Gaps');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet((STATE._M.orphans.length?STATE._M.orphans:[{host:'(none)'}])), 'Orphans');
-    XLSX.writeFile(wb, `agent_coverage_${stamp}.xlsx`); return; }
+  if(kind==='metrics-json'){ dl(`agent_coverage_metrics_${stamp}.json`, JSON.stringify(Object.fromEntries(summaryAoa().slice(1)), null, 2), 'application/json'); return; }
+  if(kind==='full-csv'){ const parts=reportSections().map(s=>`# ${s.name}\n`+toCsv(s.aoa[0]||[], s.aoa.slice(1))); dl(`agent_coverage_full_${stamp}.csv`, parts.join('\n\n\n'), 'text/csv'); return; }
+  if(kind==='full-csv-clip'){ const txt=reportSections().map(s=>`# ${s.name}\n`+toCsv(s.aoa[0]||[], s.aoa.slice(1))).join('\n\n\n'); copyTable(txt, 'Full report CSV copied to clipboard'); return; }
+  if(kind==='full-tsv-clip'){ const secs=reportSections(); const cell=c=>String(c==null?'':c).replace(/[\t\r\n]+/g,' ');
+    const txt=secs.map(s=>`# ${s.name}\n`+s.aoa.map(r=>r.map(cell).join('\t')).join('\n')).join('\n\n\n'); copyTable(txt, 'Full report copied — paste into Excel or Numbers', sectionsToHtmlTable(secs)); return; }
+  if(kind==='full-img-clip'){ if(!(navigator.clipboard && window.ClipboardItem)){ toast('Clipboard not supported here'); return; }
+    showLoading('Rendering full report image…'); const safety=setTimeout(hideLoading,12000);
+    const blobP=(async()=>{ const c=await rasterPanel($('#dashboard')); return await canvasToBlob(c,'image/png'); })();
+    navigator.clipboard.write([new ClipboardItem({'image/png':blobP})]).then(()=>toast('Full report image copied to clipboard')).catch(e=>{console.error(e);toast('Image copy failed');}).finally(()=>{clearTimeout(safety);hideLoading();}); return; }
+  if(kind==='full-xlsx'){ const wb=XLSX.utils.book_new();
+    reportSections().forEach(s=>{ const ws=XLSX.utils.aoa_to_sheet(s.aoa);
+      ws['!cols']=(s.aoa[0]||[]).map((_,i)=>{ let m=4; s.aoa.forEach(r=>{ if(r[i]!=null){const L=String(r[i]).length; if(L>m)m=L;} }); return {wch:Math.min(Math.max(m+2,8),60)}; });
+      XLSX.utils.book_append_sheet(wb, ws, s.name.slice(0,31)); });
+    XLSX.writeFile(wb, `agent_coverage_full_${stamp}.xlsx`); return; }
 });
 buildExportMenu();
