@@ -1,6 +1,6 @@
 'use strict';
 // ---------- state ----------
-const STATE = { ad:[], me:[], ten:[], cs:[], adCols:[], src:{}, staleDays:30, denom:'enabled',
+const STATE = { ad:[], me:[], ten:[], cs:[], intune:[], adCols:[], src:{}, staleDays:30, denom:'enabled',
   excludeNonReal:true, logonFilter:true, logonDays:15 };
 const $ = s => document.querySelector(s);
 const fmt = n => (n==null?'—':Number(n).toLocaleString());
@@ -16,7 +16,7 @@ $('#themeBtn').addEventListener('click', ()=>{ const d=document.documentElement.
 
 // ---------- file pickers ----------
 function pick(k){ $('#file-'+k).click(); }
-['ad','me','ten','cs'].forEach(k=>{
+['ad','me','ten','cs','intune'].forEach(k=>{
   $('#file-'+k).addEventListener('change', e=>{ const f=e.target.files[0]; if(f) handleFile(k,f); });
 });
 async function handleFile(kind, file){
@@ -32,7 +32,7 @@ async function handleFile(kind, file){
   }catch(err){ console.error(err); markStatus(kind, '⚠️ '+(err.message||err)); }
   finally{ hideLoading(); }
 }
-const FLATBTN = { ad:'adFlatBtn', me:'meFlatBtn', ten:'tenFlatBtn', cs:'csFlatBtn' };
+const FLATBTN = { ad:'adFlatBtn', me:'meFlatBtn', ten:'tenFlatBtn', cs:'csFlatBtn', intune:'intuneFlatBtn' };
 function markLoaded(kind, name){ const slot=document.getElementById('slot-'+slotId(kind)); slot.classList.add('loaded');
   markStatus(kind, '✓ '+name+' · '+(STATE[kind].length).toLocaleString()+' rows');
   const fb=document.getElementById(FLATBTN[kind]); if(fb) fb.classList.remove('hidden');
@@ -81,6 +81,9 @@ function colsFor(kind){
   if(kind==='cs') return { name:findCol(c,[/host.?name/i,/^host$/i,/^name$/i,/computer/i]),
     seen:findCol(c,[/last.?seen/i,/last.?contact/i]), ver:findCol(c,[/sensor.?version/i,/agent.?version/i,/version/i]),
     status:findCol(c,[/status/i,/rfm/i,/reduced/i]), group:findCol(c,[/^ou$/i,/group/i]) };
+  if(kind==='intune') return { name:findCol(c,[/device.?name/i,/computer.?name/i,/host.?name/i,/^name$/i]),
+    seen:findCol(c,[/last.?check.?in/i,/last.?sync/i,/last.?contact/i,/last.?seen/i]), ver:findCol(c,[/os.?version/i,/version/i]),
+    status:findCol(c,[/compliance/i,/status/i]), group:findCol(c,[/ownership/i,/group/i]) };
 }
 
 // ---------- build the coverage model ----------
@@ -94,11 +97,11 @@ function buildModel(){
   const adLogonCol= findCol(STATE.adCols,[/lastlogondate/i,/lastlogontimestamp/i,/lastlogon/i]);
   const adSpnCol  = findCol(STATE.adCols,[/serviceprincipalname/i]);
 
-  const sources = { ten:colsFor('ten'), me:colsFor('me'), cs:colsFor('cs') };
+  const sources = Object.fromEntries(AKEYS.map(k=>[k, colsFor(k)]));
   // index each agent source by normalized hostname
-  const idx = {}; const matched = { ten:new Set(), me:new Set(), cs:new Set() };
-  ['ten','me','cs'].forEach(k=>{ idx[k]=new Map(); const nm=sources[k].name;
-    STATE[k].forEach(r=>{ const key=norm(nm?r[nm]:r[Object.keys(r)[0]]); if(key && !idx[k].has(key)) idx[k].set(key, r); }); });
+  const idx = {}; const matched = Object.fromEntries(AKEYS.map(k=>[k, new Set()]));
+  AKEYS.forEach(k=>{ idx[k]=new Map(); const nm=sources[k].name;
+    (STATE[k]||[]).forEach(r=>{ const key=norm(nm?r[nm]:r[Object.keys(r)[0]]); if(key && !idx[k].has(key)) idx[k].set(key, r); }); });
 
   const ad = STATE.ad.map(r=>{
     const name = adField(r,[adNameCol]) || '';
@@ -109,11 +112,11 @@ function buildModel(){
     const enabledRaw = adField(r,[adEnCol]); const enabled = /true|1|yes/i.test(String(enabledRaw)) || enabledRaw===true;
     const os = adField(r,[adOsCol]) || '—';
     const cov = {};
-    ['ten','me','cs'].forEach(k=>{ const rec=idx[k].get(key); if(rec){ matched[k].add(key);
+    AKEYS.forEach(k=>{ const rec=idx[k].get(key); if(rec){ matched[k].add(key);
       const s=sources[k].seen; const days = s? daysSince(rec[s]) : null;
       cov[k]={present:true, rec, days, stale: days!=null && days>STALE}; }
       else cov[k]={present:false}; });
-    const nAgents = ['ten','me','cs'].filter(k=>cov[k].present).length;
+    const nAgents = AKEYS.filter(k=>cov[k].present).length;
     const spn = adField(r,[adSpnCol]);
     const isReal = !!String(os).trim() && os!=='—' && !/cluster/i.test(String(spn));
     const logonDays = daysSince(adField(r,[adLogonCol]));
@@ -124,14 +127,16 @@ function buildModel(){
   // orphans: agent records with no matching AD computer
   const adKeys = new Set(ad.map(c=>c.key));
   const orphans = [];
-  ['ten','me','cs'].forEach(k=>{ const nm=sources[k].name;
-    STATE[k].forEach(r=>{ const key=norm(nm?r[nm]:r[Object.keys(r)[0]]); if(key && !adKeys.has(key))
-      orphans.push({ source:({ten:'Tenable',me:'ManageEngine',cs:'CrowdStrike'})[k], host:(nm?r[nm]:key), seen:(sources[k].seen?r[sources[k].seen]:'') }); }); });
+  AKEYS.forEach(k=>{ const nm=sources[k].name;
+    (STATE[k]||[]).forEach(r=>{ const key=norm(nm?r[nm]:r[Object.keys(r)[0]]); if(key && !adKeys.has(key))
+      orphans.push({ source:AGENT_NAME[k], host:(nm?r[nm]:key), seen:(sources[k].seen?r[sources[k].seen]:'') }); }); });
 
   return { ad, sources, matched, orphans, adNameCol };
 }
 
-const AGENTS = [ ['me','ManageEngine','#b9770b'], ['ten','Tenable','#003f73'], ['cs','CrowdStrike','#1f9d57'] ];
+const AGENTS = [ ['me','ManageEngine','#b9770b'], ['ten','Tenable','#003f73'], ['cs','CrowdStrike','#1f9d57'], ['intune','Intune','#534ab7'] ];
+const AKEYS = AGENTS.map(a=>a[0]);
+const AGENT_NAME = Object.fromEntries(AGENTS.map(a=>[a[0],a[1]]));
 
 // ---------- render ----------
 let CHARTS = [];
@@ -149,7 +154,7 @@ function render(){
   const nNonReal = M.ad.filter(c=>!c.isReal).length;
   const cov = k => inScope.filter(c=>c.cov[k].present).length;
   const stale = k => inScope.filter(c=>c.cov[k].present && c.cov[k].stale).length;
-  const fully = inScope.filter(c=>c.nAgents===3).length;
+  const fully = inScope.filter(c=>c.nAgents===AKEYS.length).length;
   const none  = inScope.filter(c=>c.nAgents===0).length;
 
   const d = $('#dashboard'); d.innerHTML='';
@@ -159,7 +164,7 @@ function render(){
   const kpi = (l,v,s,col)=>`<div class="card"><div class="l">${l}</div><div class="v"${col?` style="color:${col}"`:''}>${v}</div>${s?`<div class="s">${s}</div>`:''}</div>`;
   let cards = kpi('AD computers', fmt(M.ad.length), `${fmt(denom)} in scope · ${fmt(nNonReal)} cluster/alias`);
   AGENTS.forEach(([k,label,c])=>{ const n=cov(k); cards += kpi(label+' coverage', pct(n,denom)+'%', `${fmt(n)} / ${fmt(denom)} · ${fmt(stale(k))} stale`, c); });
-  cards += kpi('Fully covered', pct(fully,denom)+'%', `${fmt(fully)} on all 3 agents`, 'var(--ok)');
+  cards += kpi('Fully covered', pct(fully,denom)+'%', `${fmt(fully)} on all ${AKEYS.length} agents`, 'var(--ok)');
   cards += kpi('No coverage', fmt(none), 'in-scope, 0 agents', none? 'var(--crit)':null);
   cards += kpi('Orphan agents', fmt(M.orphans.length), 'agents with no AD match', M.orphans.length?'var(--warn)':null);
   d.insertAdjacentHTML('beforeend', `<div class="cards">${cards}</div>`);
@@ -246,9 +251,9 @@ function buildMatrix(M, inScope){
     let rows = inScope.filter(c=>{
       if(q && !c.name.toUpperCase().includes(q)) return false;
       if(seg && c.seg!==seg) return false; if(os && c.os!==os) return false; if(type && c.type!==type) return false;
-      if(view==='gaps' && c.nAgents===3) return false;
+      if(view==='gaps' && c.nAgents===AKEYS.length) return false;
       if(view==='none' && c.nAgents!==0) return false;
-      if(view==='full' && c.nAgents!==3) return false;
+      if(view==='full' && c.nAgents!==AKEYS.length) return false;
       if(view==='stale' && !['ten','me','cs'].some(k=>c.cov[k].stale)) return false;
       return true;
     });
@@ -258,7 +263,7 @@ function buildMatrix(M, inScope){
       <td>${c.name}</td><td>${c.seg}</td><td style="font-size:12px">${c.os}</td><td>${c.type}</td>
       <td>${c.enabled?'<span class="pill ok">Yes</span>':'<span class="pill muted">No</span>'}</td>
       ${AGENTS.map(a=>`<td>${cell(c.cov[a[0]])}</td>`).join('')}
-      <td class="num">${c.nAgents===3?'<span class="pill ok">3/3</span>':c.nAgents===0?'<span class="pill gap">0/3</span>':c.nAgents+'/3'}</td></tr>`).join('')
+      <td class="num">${c.nAgents===AKEYS.length?`<span class="pill ok">${AKEYS.length}/${AKEYS.length}</span>`:c.nAgents===0?`<span class="pill gap">0/${AKEYS.length}</span>`:c.nAgents+'/'+AKEYS.length}</td></tr>`).join('')
       + (rows.length>2000?`<tr><td colspan="9" class="sub">Showing first 2,000 of ${rows.length.toLocaleString()} — refine filters or export the full set.</td></tr>`:'');
   };
   ['mxSearch','mxView','mxSeg','mxOs','mxType'].forEach(id=>$('#'+id).addEventListener('input',fill));
@@ -342,19 +347,22 @@ async function savePanel(el,name,fmt,btn){ const stamp=new Date().toISOString().
 
 // ---------- sample data ----------
 $('#loadSample').addEventListener('click', loadSample);
+if(/[?&]autosample=1/.test(location.search)) window.addEventListener('load', loadSample);   // demo links / headless screenshots
 async function loadSample(){
   if(location.protocol==='file:'){ $('#loadHint').innerHTML='⚠️ Sample auto-load needs the page served over http (browsers block local file reads). Run <code>python3 -m http.server</code> here, or load your own files.'; return; }
   try{
     showLoading('Loading sample data…'); await nextPaint();
-    const [adTxt, meTxt, tenTxt, csTxt] = await Promise.all([
+    const [adTxt, meTxt, tenTxt, csTxt, intuneTxt] = await Promise.all([
       fetch('sample-data/ad-computers.json').then(r=>r.text()),
       fetch('sample-data/manageengine.csv').then(r=>r.text()),
       fetch('sample-data/tenable-agents.csv').then(r=>r.text()),
-      fetch('sample-data/crowdstrike.csv').then(r=>r.text()) ]);
+      fetch('sample-data/crowdstrike.csv').then(r=>r.text()),
+      fetch('sample-data/intune.csv').then(r=>r.text()) ]);
     STATE.ad = flattenAd(adTxt); STATE.adCols = unionCols(STATE.ad); STATE.src.ad='ad-computers.json'; markLoaded('ad','ad-computers.json (sample)');
     STATE.me = Papa.parse(meTxt,{header:true,skipEmptyLines:true}).data; STATE.src.me='manageengine.csv'; markLoaded('me','manageengine.csv (sample)');
     STATE.ten = Papa.parse(tenTxt,{header:true,skipEmptyLines:true}).data; STATE.src.ten='tenable-agents.csv'; markLoaded('ten','tenable-agents.csv (sample)');
     STATE.cs = Papa.parse(csTxt,{header:true,skipEmptyLines:true}).data; STATE.src.cs='crowdstrike.csv'; markLoaded('cs','crowdstrike.csv (sample)');
+    STATE.intune = Papa.parse(intuneTxt,{header:true,skipEmptyLines:true}).data; STATE.src.intune='intune.csv'; markLoaded('intune','intune.csv (sample)');
     showLoading('Building dashboard…'); await nextPaint(); render();
   }catch(e){ console.error(e); alert('Could not load sample (serve over http, or load files manually).'); }
   finally{ hideLoading(); }
@@ -376,7 +384,7 @@ function matrixRows(){ const ad=STATE._inScope||[];
   const seen=(c,k)=>{ const co=c.cov[k]; if(!co.present) return ''; const s=STATE._M.sources[k].seen; return s?co.rec[s]:''; };
   return ad.map(c=>{ const o={ computer:c.name, segment:c.seg, os:c.os, type:c.type, enabled:c.enabled };
     AGENTS.forEach(([k,label])=>{ const key=label.toLowerCase(); o[key]=fld(c,k); o[key+'_last_seen']=seen(c,k); });
-    o.agents=c.nAgents+'/3'; return o; }); }
+    o.agents=c.nAgents+'/'+AKEYS.length; return o; }); }
 function objCols(objs){ return objs.length? Object.keys(objs[0]) : []; }
 function objRows(objs,cols){ return objs.map(o=>cols.map(c=>o[c])); }
 
@@ -384,8 +392,8 @@ function summaryAoa(){ const ad=STATE._inScope||[]; const denom=ad.length||1;
   const r=[['metric','value']];
   r.push(['AD computers (total)', STATE.ad.length]); r.push(['AD computers (in scope)', ad.length]); r.push(['Scope', STATE.denom]);
   AGENTS.forEach(([k,l])=>{ const n=ad.filter(c=>c.cov[k].present).length; r.push([l+' covered', n]); r.push([l+' coverage %', pct(n,denom)]); r.push([l+' stale', ad.filter(c=>c.cov[k].present&&c.cov[k].stale).length]); });
-  r.push(['Fully covered (3/3)', ad.filter(c=>c.nAgents===3).length]);
-  r.push(['No coverage (0/3)', ad.filter(c=>c.nAgents===0).length]);
+  r.push([`Fully covered (${AKEYS.length}/${AKEYS.length})`, ad.filter(c=>c.nAgents===AKEYS.length).length]);
+  r.push([`No coverage (0/${AKEYS.length})`, ad.filter(c=>c.nAgents===0).length]);
   r.push(['Orphan agents', (STATE._M.orphans||[]).length]);
   return r; }
 
@@ -402,15 +410,15 @@ $('#exportBtn').addEventListener('click', ()=>{
   const kind=$('#exportSel').value, stamp=new Date().toISOString().slice(0,10);
   if(kind==='flatad-csv'){ downloadFlatAd(); return; }
   if(kind==='matrix-csv'){ const m=matrixRows(); const c=objCols(m); dl(`coverage_matrix_${stamp}.csv`, toCsv(c, objRows(m,c)), 'text/csv'); return; }
-  if(kind==='gaps-csv'){ const gaps=(STATE._inScope||[]).filter(c=>c.nAgents<3).map(c=>({computer:c.name,segment:c.seg,os:c.os,type:c.type,
-      missing:AGENTS.filter(([k])=>!c.cov[k].present).map(a=>a[1]).join('; '), agents:c.nAgents+'/3'}));
+  if(kind==='gaps-csv'){ const gaps=(STATE._inScope||[]).filter(c=>c.nAgents<AKEYS.length).map(c=>({computer:c.name,segment:c.seg,os:c.os,type:c.type,
+      missing:AGENTS.filter(([k])=>!c.cov[k].present).map(a=>a[1]).join('; '), agents:c.nAgents+'/'+AKEYS.length}));
     const c=objCols(gaps); dl(`coverage_gaps_${stamp}.csv`, toCsv(c, objRows(gaps,c)), 'text/csv'); return; }
   if(kind==='orphans-csv'){ const o=STATE._M.orphans; const c=['host','source','seen']; dl(`orphan_agents_${stamp}.csv`, toCsv(c, o.map(x=>[x.host,x.source,x.seen])), 'text/csv'); return; }
   if(kind==='full-xlsx'){
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryAoa()), 'Summary');
     const m=matrixRows(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(m), 'Coverage Matrix');
-    const gaps=(STATE._inScope||[]).filter(c=>c.nAgents<3).map(c=>({computer:c.name,segment:c.seg,os:c.os,type:c.type,missing:AGENTS.filter(([k])=>!c.cov[k].present).map(a=>a[1]).join('; ')}));
+    const gaps=(STATE._inScope||[]).filter(c=>c.nAgents<AKEYS.length).map(c=>({computer:c.name,segment:c.seg,os:c.os,type:c.type,missing:AGENTS.filter(([k])=>!c.cov[k].present).map(a=>a[1]).join('; ')}));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(gaps.length?gaps:[{computer:'(none)'}]), 'Gaps');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet((STATE._M.orphans.length?STATE._M.orphans:[{host:'(none)'}])), 'Orphans');
     XLSX.writeFile(wb, `agent_coverage_${stamp}.xlsx`); return; }

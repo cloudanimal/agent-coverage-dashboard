@@ -1,23 +1,32 @@
 # Agent Coverage Dashboard
 
-A **100% browser-local** dashboard that reconciles your **Active Directory** computer inventory against your **Tenable**, **ManageEngine Endpoint Central**, and **CrowdStrike** agents — so you can see, per machine, which security/management agents are actually installed, which are stale, and where the gaps are. **The data never leaves your browser.** No server, no upload, no SaaS.
+A **100% browser-local** dashboard that reconciles your **Active Directory** computer inventory against your **ManageEngine Endpoint Central**, **Tenable**, **CrowdStrike**, and **Microsoft Intune** agents — so you can see, per machine, which security/management agents are actually installed, which are stale, and where the gaps are. **The data never leaves your browser.** No server, no upload, no SaaS.
 
 **Live:** https://cloudanimal.github.io/agent-coverage-dashboard/
+
+![Agent coverage dashboard on the synthetic sample dataset](docs/screenshots/dashboard.png)
 
 ## Why
 
 Agent coverage is the quiet failure mode of every security program: a vuln scanner, a patch agent, and an EDR sensor are only as good as the percentage of machines they're actually on. The authoritative list of machines is Active Directory — everything else should reconcile back to it. This page does that reconciliation in the browser, so you can run it against sensitive asset exports without sending them anywhere.
 
-## The four inputs
+## The inputs
 
 | # | Source | How to produce it | Key columns used |
 |---|---|---|---|
-| ① | **Active Directory** | `Get-ADComputer -Filter * -Properties * \| ConvertTo-Json` (JSON), or a flattened CSV | `Name`, `DNSHostName`, `Enabled`, `OperatingSystem`, `DistinguishedName` (OU → segment/type) |
-| ② | **ManageEngine** | Endpoint Central system report (CSV) | Computer Name, Agent Version, Last Contact Time, Last Successful Scan Time, Last Patch Date, Custom Group |
-| ③ | **Tenable** | Agent export from [`Export-TIOAgents.ps1`](https://github.com/cloudanimal/NessusAgent/blob/main/Public/Export-TIOAgents.ps1) (CSV) | Hostname, AgentId, Groups, LastConnectUtc, LastScannedUtc |
-| ④ | **CrowdStrike** | Falcon host export (CSV) | Hostname, Sensor Version, Last Seen, Status / RFM, OS Version, Platform |
+| ① | **Active Directory** | `Get-ADComputer -Filter * -Properties * \| ConvertTo-Json` (JSON), or a flattened CSV | `Name`, `DNSHostName`, `Enabled`, `OperatingSystem`, `DistinguishedName` (OU → segment/type), `LastLogonDate`, `ServicePrincipalName` |
+| ② | **ManageEngine** | Endpoint Central system report (CSV/JSON) | Computer Name, Agent Version, Last Contact Time, Last Successful Scan Time, Last Patch Date, Custom Group |
+| ③ | **Tenable** | Agent export from [`Export-TIOAgents.ps1`](https://github.com/cloudanimal/NessusAgent/blob/main/Public/Export-TIOAgents.ps1) (CSV/JSON) | Hostname, AgentId, Groups, LastConnectUtc, LastScannedUtc |
+| ④ | **CrowdStrike** | Falcon host export (CSV/JSON) | Hostname, Sensor Version, Last Seen, Status / RFM, OS Version, Platform |
+| ⑤ | **Microsoft Intune** | Endpoint Manager device export (CSV/JSON) | Device name, Compliance state, OS, Last check-in, Ownership |
 
-Active Directory is the **source of truth** (the denominator). The other three are matched back to it.
+Active Directory is the **source of truth** (the denominator). The agent sources are matched back to it. Every source accepts **CSV or JSON** and offers a **"download flattened CSV"** button.
+
+### Filtering to real, active systems
+
+Two AD-aware scope filters (both on by default) keep coverage honest:
+- **Real systems only** — excludes cluster name objects, virtual computer objects, and aliases (anything with no `OperatingSystem` or a cluster `ServicePrincipalName` such as `MSServerClusterMgmtAPI/…`).
+- **Logged on within N days** (default 15) — narrows to recently-active machines, so decommissioned-but-not-deleted objects don't drag the denominator.
 
 ### Hostname matching
 
@@ -42,7 +51,7 @@ Coverage matrix (CSV), coverage gaps (CSV), orphan agents (CSV), the flattened A
 
 ## Try it
 
-Click **Load sample data** — a fully synthetic dataset (520 AD computers across 5 segments, plus matching ManageEngine / Tenable / CrowdStrike exports with realistic gaps, stale agents, and orphans). It is **not** based on any real organization.
+Click **Load sample data** — a fully synthetic dataset (11,528 AD computers across 5 segments + 60 cluster/alias objects, plus matching ManageEngine / Tenable / CrowdStrike / Intune exports with realistic gaps, stale agents, and orphans). It uses the **same systems as the [Tenable VM dashboard](https://github.com/cloudanimal/tenable-vm-dashboard)** so the two line up. It is **not** based on any real organization.
 
 ## Run locally
 
