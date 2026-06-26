@@ -599,6 +599,10 @@ function buildMatrix(M, inScope){
       $('#matrixPanel').querySelectorAll('th .sortind').forEach(s=>s.remove());
       const ind=document.createElement('span'); ind.className='sortind'; ind.style.cssText='margin-left:4px;opacity:.7';
       ind.textContent=STATE._sort.dir===1?'▲':'▼'; th.appendChild(ind); fill(); }); });
+  // click a row to highlight it (single selection; click again to clear)
+  $('#mxBody').addEventListener('click', e=>{ const tr=e.target.closest('tr'); if(!tr || !tr.querySelector('td')) return;
+    const wasSel=tr.classList.contains('sel'); $('#mxBody').querySelectorAll('tr.sel').forEach(r=>r.classList.remove('sel'));
+    if(!wasSel) tr.classList.add('sel'); });
   STATE._matrixFill = fill; fill();
 }
 

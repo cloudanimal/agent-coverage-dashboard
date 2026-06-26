@@ -69,6 +69,9 @@
   th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.03em;cursor:pointer;position:sticky;top:0;background:var(--panel);z-index:1}
   td.num,th.num{text-align:right}
   .scrollwrap{overflow:auto;max-height:460px;border:1px solid var(--line);border-radius:8px}
+  #mxBody tr{cursor:pointer}
+  #mxBody tr:hover td{background:color-mix(in srgb,var(--txt) 5%,transparent)}
+  #mxBody tr.sel td{background:color-mix(in srgb,var(--accent) 18%,transparent)}
   .pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:100px;font-weight:600}
   .pill.ok{background:color-mix(in srgb,var(--ok) 22%,transparent);color:var(--ok)}
   .pill.gap{background:color-mix(in srgb,var(--crit) 22%,transparent);color:var(--crit)}
