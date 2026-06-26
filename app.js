@@ -443,7 +443,8 @@ function render(){
   const grpLabel = grpSelN ? `Groups: ${STATE.grpMode==='include'?'include':'exclude'} ${grpSelN} ▾` : 'Groups: all ▾';
   const ouNote = ouSelN ? `, OU filter: ${STATE.ouMode==='include'?'include only':'exclude'} ${ouSelN} OU${ouSelN>1?'s':''}` : '';
   const grpNote = grpSelN ? `, group filter: ${STATE.grpMode==='include'?'include only':'exclude'} ${grpSelN} group${grpSelN>1?'s':''}` : '';
-  d.insertAdjacentHTML('beforeend', `<div class="panel"><div class="controls">
+  const scopeCtl = $('#srcBarControls');
+  if(scopeCtl) scopeCtl.innerHTML = `<div class="controls" style="border-top:1px solid var(--line);padding-top:10px">
     <label class="sub">Coverage denominator
       <select id="denomSel"><option value="enabled"${STATE.denom==='enabled'?' selected':''}>Enabled AD computers</option><option value="all"${STATE.denom==='all'?' selected':''}>All AD computers</option></select></label>
     <label class="sub" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="realChk"${STATE.excludeNonReal?' checked':''}> Real systems only <span class="sub" title="Excludes objects with no OperatingSystem or a cluster service principal name (cluster name objects, aliases)">(exclude cluster/alias)</span></label>
@@ -451,7 +452,7 @@ function render(){
     <label class="sub">Stale threshold <input id="staleInp" type="number" min="1" value="${STATE.staleDays}" style="width:64px"> days</label>
     ${mselHtml({id:'ou', btnLabel:ouLabel, mode:STATE.ouMode, sel:STATE.ouSel, values:allOus, noun:'OUs'})}
     ${mselHtml({id:'grp', btnLabel:grpLabel, mode:STATE.grpMode, sel:STATE.grpSel, values:allGroups, noun:'groups'})}
-  </div><div class="sub">Scope = ${fmt(denom)} of ${fmt(M.ad.length)} AD objects (excluded: ${STATE.excludeNonReal?fmt(nNonReal)+' cluster/alias':'none'}${STATE.logonFilter?', plus anything not logged on in '+STATE.logonDays+'d':''}${ouNote}${grpNote}). An agent is “stale” if its last <em>contact</em> is older than the stale threshold.</div></div>`);
+  </div><div class="sub" style="margin-top:8px">Scope = ${fmt(denom)} of ${fmt(M.ad.length)} AD objects (excluded: ${STATE.excludeNonReal?fmt(nNonReal)+' cluster/alias':'none'}${STATE.logonFilter?', plus anything not logged on in '+STATE.logonDays+'d':''}${ouNote}${grpNote}). An agent is “stale” if its last <em>contact</em> is older than the stale threshold.</div>`;
   $('#denomSel').addEventListener('change',e=>{ STATE.denom=e.target.value; render(); });
   $('#realChk').addEventListener('change',e=>{ STATE.excludeNonReal=e.target.checked; render(); });
   $('#logonChk').addEventListener('change',e=>{ STATE.logonFilter=e.target.checked; render(); });
