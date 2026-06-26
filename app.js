@@ -46,7 +46,7 @@ $('#themeBtn').addEventListener('click', ()=>{ const d=document.documentElement.
   document.documentElement.dataset.theme=d; localStorage.setItem('acd-theme',d); applyPalette(STATE.cbTheme); });
 $('#cbSel') && $('#cbSel').addEventListener('change', e=>applyPalette(e.target.value));
 $('#resetBtn') && $('#resetBtn').addEventListener('click', ()=>location.reload());
-applyPalette((function(){ try{ return localStorage.getItem('acd-cb'); }catch(e){ return null; } })() || 'default');
+applyPalette((function(){ try{ return localStorage.getItem('acd-cb'); }catch(e){ return null; } })() || 'protanopia');
 
 // ---------- file pickers ----------
 function pick(k){ $('#file-'+k).click(); }
