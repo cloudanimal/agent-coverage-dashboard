@@ -1,0 +1,8 @@
+{
+  "staleDays": 30,
+  "logonDays": 15,
+  "health": {
+    "server":      { "me": 2,  "ten": 2,  "cs": 2 },
+    "workstation": { "me": 14, "ten": 14, "cs": 7 }
+  }
+}

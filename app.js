@@ -2,10 +2,28 @@
 // ---------- state ----------
 const STATE = { ad:[], me:[], ten:[], cs:[], adCols:[], src:{}, staleDays:30, denom:'enabled',
   excludeNonReal:true, logonFilter:true, logonDays:15, cbTheme:'default',
-  // agent health = recency of each agent's scan (or check-in for CrowdStrike, which has no scan),
-  // configurable per agent like the Tenable dashboard's per-severity SLA day targets.
-  healthDays:{ me:2, ten:2, cs:2 } };
-const DEFAULT_HEALTH_DAYS = { me:2, ten:2, cs:2 };
+  // agent health = recency of each agent's scan (check-in for CrowdStrike, which has no scan),
+  // per device type × per agent, configurable like the Tenable dashboard's SLA day targets.
+  health:{ server:{me:2,ten:2,cs:2}, workstation:{me:14,ten:14,cs:7} } };
+// Hard-coded fallback defaults — overridden by config.json when it loads (keeps the app working offline / from file://).
+const FALLBACK_CONFIG = { staleDays:30, logonDays:15, health:{ server:{me:2,ten:2,cs:2}, workstation:{me:14,ten:14,cs:7} } };
+let DEFAULT_HEALTH = JSON.parse(JSON.stringify(FALLBACK_CONFIG.health));   // reset target; replaced by config.json
+function healthProfile(type){ return type==='Windows Workstation' ? 'workstation' : 'server'; }   // servers, RHEL, Other → server
+
+// Load default thresholds from config.json (merged over the fallback). Static-safe: any failure keeps the fallback.
+async function loadConfig(){
+  try{
+    const cfg = await fetch('config.json', {cache:'no-store'}).then(r=>r.ok?r.json():null);
+    if(cfg && typeof cfg==='object'){
+      if(cfg.staleDays!=null) STATE.staleDays = cfg.staleDays;
+      if(cfg.logonDays!=null) STATE.logonDays = cfg.logonDays;
+      if(cfg.health){ ['server','workstation'].forEach(p=>{ if(cfg.health[p]) STATE.health[p] = { ...STATE.health[p], ...cfg.health[p] }; }); }
+      DEFAULT_HEALTH = JSON.parse(JSON.stringify(STATE.health));
+      if(STATE.built) render();
+    }
+  }catch(e){ /* keep fallback defaults */ }
+}
+loadConfig();
 const $ = s => document.querySelector(s);
 const fmt = n => (n==null?'—':Number(n).toLocaleString());
 const pct = (a,b) => b? Math.round(a/b*100) : 0;
@@ -176,7 +194,8 @@ function buildModel(){
       // health: ManageEngine/Tenable use last successful scan; CrowdStrike has no scan → use check-in (last seen)
       const hf = (k==='cs') ? sources[k].seen : sources[k].scan;
       const healthDays = hf ? daysSince(rec[hf]) : null;
-      const thr = (STATE.healthDays && STATE.healthDays[k]!=null) ? STATE.healthDays[k] : 2;
+      const prof = STATE.health[healthProfile(type)] || {};
+      const thr = prof[k]!=null ? prof[k] : 2;
       const unhealthy = hf ? (healthDays==null || healthDays>thr) : false;   // present but health signal stale
       cov[k]={present:true, rec, days, stale: days!=null && days>STALE, healthDays, hasHealth:!!hf, unhealthy}; }
       else cov[k]={present:false}; });
@@ -256,20 +275,23 @@ function render(){
   $('#logonDays').addEventListener('change',e=>{ STATE.logonDays=Math.max(1,parseInt(e.target.value)||15); render(); });
   $('#staleInp').addEventListener('change',e=>{ STATE.staleDays=Math.max(1,parseInt(e.target.value)||30); render(); });
 
-  // agent-health thresholds — per-agent day targets, editable like the Tenable dashboard's SLAs
-  const hk = AGENTS.map(([k,label])=>{ const fld = k==='cs' ? 'check-in' : 'scan';
-    return `<label class="sub" style="display:flex;align-items:center;gap:6px"><span class="sw" style="background:var(${AGENTS.find(a=>a[0]===k)[2]})"></span>${label} <span class="sub">(${fld})</span>
-      <input class="healthInp" data-agent="${k}" type="number" min="1" value="${STATE.healthDays[k]}" style="width:54px"> days</label>`; }).join('');
+  // agent-health thresholds — per device type × per agent day targets, editable like the Tenable dashboard's SLAs
+  const profRow = (prof, plabel) => `<div class="controls" style="margin-top:6px;align-items:center">
+    <span class="sub" style="min-width:96px;font-weight:600">${plabel}</span>` +
+    AGENTS.map(([k,label,cvar])=>{ const fld = k==='cs' ? 'check-in' : 'scan';
+      return `<label class="sub" style="display:flex;align-items:center;gap:6px"><span class="sw" style="background:var(${cvar})"></span>${label} <span class="sub">(${fld})</span>
+        <input class="healthInp" data-profile="${prof}" data-agent="${k}" type="number" min="1" value="${STATE.health[prof][k]}" style="width:54px"> days</label>`; }).join('') + `</div>`;
   d.insertAdjacentHTML('beforeend', `<div class="panel" id="healthCfg">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
       <h3 style="margin:0">Agent health thresholds</h3>
       <button id="healthReset" class="btn" style="font-size:12px;padding:5px 11px">Reset</button>
     </div>
-    <p class="sub" style="margin:8px 0 2px"><b style="color:var(--accent)">Edit the day values</b> to set how recently each agent must have scanned (ManageEngine / Tenable) or checked in (CrowdStrike) to count as healthy — every metric recalculates instantly. An agent that is contacting but past its threshold shows <span class="pill noscan">unhealthy</span>.</p>
-    <div class="controls" style="margin-top:8px">${hk}</div></div>`);
+    <p class="sub" style="margin:8px 0 2px"><b style="color:var(--accent)">Edit the day values</b> to set how recently each agent must have scanned (ManageEngine / Tenable) or checked in (CrowdStrike) to count as healthy — separately for servers and workstations. Every metric recalculates instantly; an agent contacting but past its threshold shows <span class="pill noscan">unhealthy</span>. Defaults load from <code>config.json</code>.</p>
+    ${profRow('server','Servers / RHEL')}
+    ${profRow('workstation','Workstations')}</div>`);
   $('#healthCfg').querySelectorAll('.healthInp').forEach(inp=>inp.addEventListener('change',e=>{
-    STATE.healthDays[e.target.dataset.agent]=Math.max(1,parseInt(e.target.value)||2); render(); }));
-  $('#healthReset').addEventListener('click',()=>{ STATE.healthDays={...DEFAULT_HEALTH_DAYS}; render(); });
+    STATE.health[e.target.dataset.profile][e.target.dataset.agent]=Math.max(1,parseInt(e.target.value)||2); render(); }));
+  $('#healthReset').addEventListener('click',()=>{ STATE.health=JSON.parse(JSON.stringify(DEFAULT_HEALTH)); render(); });
 
   // charts
   d.insertAdjacentHTML('beforeend', `<div class="grid2">
