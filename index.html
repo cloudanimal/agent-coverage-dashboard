@@ -131,10 +131,12 @@
 </header>
 <main>
   <section id="uploader">
-    <div id="srcBar" class="hidden" style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <div id="srcBar" class="hidden" style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <span style="font-weight:600">Sources</span>
-      <span id="srcBarList" class="sub" style="flex:1"></span>
-      <button class="btn" onclick="toggleUploader(true)">Edit sources</button>
+      <span id="srcBarList" class="sub"></span>
+      <span class="sub" style="font-weight:600;margin-left:6px" title="AD rules scope the whole analysis; agent rules flag matched-but-failing records as invalid. Each agent panel also holds its health thresholds.">Filters</span>
+      <span id="srcBarFilters" class="ftoolbar"></span>
+      <button class="btn" onclick="toggleUploader(true)" style="margin-left:auto">Edit sources</button>
     </div>
     <div class="drop" id="dropZone">
       <h2>Load your sources</h2>

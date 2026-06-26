@@ -462,15 +462,11 @@ function render(){
   wireMsel({id:'ou', sel:STATE.ouSel, setMode:v=>STATE.ouMode=v, valuesLen:allOus.length});
   wireMsel({id:'grp', sel:STATE.grpSel, setMode:v=>STATE.grpMode=v, valuesLen:allGroups.length});
 
-  // ---- per-source filter toolbar (opens slide-out drawers) ----
+  // ---- per-source filter buttons, merged into the Sources bar (open slide-out drawers) ----
   const fBtn=(src,label)=>{ const n=activeRuleCount(src); return `<button class="btn fbtn" data-src="${src}">${label}${n?`<span class="fbadge">${n}</span>`:''}</button>`; };
-  d.insertAdjacentHTML('beforeend', `<div class="panel"><div class="ftoolbar">
-    <span class="sub" style="font-weight:600">Filters &amp; validity</span>
-    ${fBtn('ad','AD scope')}
-    ${AGENTS.map(([k,label])=>fBtn(k,label)).join('')}
-    <span class="sub">— AD rules scope the analysis; agent rules flag matched-but-failing records as <span class="pill invalid">invalid</span>. Each agent panel also holds its health thresholds.</span>
-  </div></div>`);
-  d.querySelectorAll('.ftoolbar .fbtn').forEach(b=>b.addEventListener('click',()=>openDrawer(b.dataset.src)));
+  const ft=$('#srcBarFilters');
+  if(ft){ ft.innerHTML = fBtn('ad','AD scope') + AGENTS.map(([k,label])=>fBtn(k,label)).join('');
+    ft.querySelectorAll('.fbtn').forEach(b=>b.addEventListener('click',()=>openDrawer(b.dataset.src))); }
   if(STATE._drawer) buildDrawer(STATE._drawer);   // keep an open drawer in sync after a re-render
 
   // charts
