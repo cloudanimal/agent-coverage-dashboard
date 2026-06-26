@@ -444,7 +444,7 @@ function render(){
   const ouNote = ouSelN ? `, OU filter: ${STATE.ouMode==='include'?'include only':'exclude'} ${ouSelN} OU${ouSelN>1?'s':''}` : '';
   const grpNote = grpSelN ? `, group filter: ${STATE.grpMode==='include'?'include only':'exclude'} ${grpSelN} group${grpSelN>1?'s':''}` : '';
   const scopeCtl = $('#srcBarControls');
-  if(scopeCtl) scopeCtl.innerHTML = `<div class="controls" style="border-top:1px solid var(--line);padding-top:10px">
+  if(scopeCtl) scopeCtl.innerHTML = `<div class="controls" style="margin-top:10px">
     <select id="denomSel" class="sub" title="Coverage denominator"><option value="enabled"${STATE.denom==='enabled'?' selected':''}>Enabled AD computers</option><option value="all"${STATE.denom==='all'?' selected':''}>All AD computers</option></select>
     <label class="sub" style="display:flex;align-items:center;gap:6px" title="Excludes objects with no OperatingSystem or a cluster service principal name (cluster name objects, aliases)"><input type="checkbox" id="realChk"${STATE.excludeNonReal?' checked':''}> Real systems only</label>
     <label class="sub" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="logonChk"${STATE.logonFilter?' checked':''}> Logged on within <input id="logonDays" type="number" min="1" value="${STATE.logonDays}" style="width:58px"> days</label>
