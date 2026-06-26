@@ -3,7 +3,9 @@
 const STATE = { ad:[], me:[], ten:[], cs:[], adCols:[], src:{}, staleDays:30, denom:'enabled',
   excludeNonReal:true, logonFilter:true, logonDays:15, cbTheme:'default',
   ouMode:'exclude', ouSel:new Set(),   // OU scope: include-only or exclude the selected OUs from the whole analysis
-  adFilters:[],                        // generic AD-attribute scope rules: {mode, field, op, value}
+  // per-source filter rules {mode, field, op, value}. AD rules scope the denominator;
+  // agent rules flag matched-but-failing records as "invalid" (still present, not a gap).
+  srcFilters:{ ad:[], me:[], ten:[], cs:[] }, _drawer:null,
   // agent health = recency of each agent's scan (check-in for CrowdStrike, which has no scan),
   // per device type × per agent, configurable like the Tenable dashboard's SLA day targets.
   health:{ server:{me:2,ten:2,cs:2}, workstation:{me:14,ten:14,cs:7} } };
@@ -142,20 +144,21 @@ const AD_OPS = {
   bool: [['true','is true'],['false','is false']],
 };
 const _adTypeCache = {};
-function adFieldType(col){
-  if(_adTypeCache[col]) return _adTypeCache[col];
-  const vals=[]; for(const r of (STATE.ad||[])){ const v=r[col]; if(v!=null&&v!==''){ vals.push(v); if(vals.length>=40) break; } }
+const srcRows = src => src==='ad' ? (STATE.ad||[]) : (STATE[src]||[]);
+function adFieldType(col, src='ad'){
+  const ck=src+'|'+col; if(_adTypeCache[ck]) return _adTypeCache[ck];
+  const vals=[]; for(const r of srcRows(src)){ const v=r[col]; if(v!=null&&v!==''){ vals.push(v); if(vals.length>=40) break; } }
   let t='text';
   if(vals.length){
     if(vals.every(v=>typeof v==='boolean' || /^(true|false)$/i.test(String(v)))) t='bool';
     else if(vals.every(v=>typeof v==='string' && /^\d{4}-\d\d-\d\dT/.test(v))) t='date';
   }
-  return (_adTypeCache[col]=t);
+  return (_adTypeCache[ck]=t);
 }
-function ruleActive(rule){ if(!rule||!rule.field) return false; const t=adFieldType(rule.field);
+function ruleActive(rule, src='ad'){ if(!rule||!rule.field) return false; const t=adFieldType(rule.field,src);
   if(t==='bool'||rule.op==='empty') return true; return rule.value!=null && rule.value!==''; }
-function ruleMatch(rec, rule){
-  const raw = rec[rule.field]; const t=adFieldType(rule.field);
+function ruleMatch(rec, rule, src='ad'){
+  const raw = rec[rule.field]; const t=adFieldType(rule.field,src);
   if(t==='date'){ const d=daysSince(raw);
     if(rule.op==='within') return d!=null && d<=(parseFloat(rule.value)||0);
     if(rule.op==='before') return raw && new Date(raw) < new Date(rule.value);
@@ -170,9 +173,70 @@ function ruleMatch(rec, rule){
   if(rule.op==='regex'){ try{ return new RegExp(rule.value,'i').test(String(raw==null?'':raw)); }catch(e){ return false; } }
   return s.includes(val);   // contains
 }
-// a row passes the AD filters if every active rule is satisfied (exclude = must NOT match)
-function passesAdFilters(rec){ return STATE.adFilters.filter(ruleActive).every(rule =>
-  rule.mode==='exclude' ? !ruleMatch(rec,rule) : ruleMatch(rec,rule)); }
+// a record passes a source's filters if every active rule is satisfied (exclude = must NOT match)
+function passesFilters(rec, src){ const rules=STATE.srcFilters[src]||[]; return rules.filter(r=>ruleActive(r,src)).every(rule =>
+  rule.mode==='exclude' ? !ruleMatch(rec,rule,src) : ruleMatch(rec,rule,src)); }
+function activeRuleCount(src){ return (STATE.srcFilters[src]||[]).filter(r=>ruleActive(r,src)).length; }
+
+// ---------- per-source filter slide-out drawers ----------
+const SRC_LABEL = { ad:'Active Directory', me:'ManageEngine', ten:'Tenable', cs:'CrowdStrike' };
+function srcCols(src){ return src==='ad' ? (STATE.adCols||[]) : unionCols(STATE[src]||[]); }
+function quickPicks(src){ const f=pats=>findCol(srcCols(src),pats);
+  const Q = {
+    ad:[ ['Exclude cluster SPNs', f([/serviceprincipalname/i]),'exclude','contains','MSServerCluster'],
+         ['Exclude “decom” (Description)', f([/description/i]),'exclude','contains','decom'],
+         ['Exclude stale password >60d', f([/passwordlastset|pwdlastset/i]),'exclude','older','60'],
+         ['Servers only (OS)', f([/operatingsystem$/i,/^os$/i]),'include','contains','server'] ],
+    cs:[ ['Invalid if Reduced Functionality Mode', f([/status/i,/rfm/i,/reduced/i]),'exclude','contains','Reduced'],
+         ['Invalid if Contained', f([/status/i]),'exclude','contains','Contained'] ],
+    me:[ ['Invalid if Health = Vulnerable', f([/health.?status/i]),'exclude','contains','Vulnerable'] ],
+    ten:[ ['Invalid if restart pending', f([/restartpending|reboot/i]),'exclude','contains','True'] ],
+  };
+  return (Q[src]||[]).filter(q=>q[1]); }
+function ruleRowHtml(rule,i,src){ const cols=srcCols(src); const t=rule.field?adFieldType(rule.field,src):'text'; const ops=AD_OPS[t];
+  const noVal = rule.op==='empty' || t==='bool';
+  return `<div class="adrule" data-i="${i}" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px">
+    <select class="arMode"><option value="exclude"${rule.mode!=='include'?' selected':''}>Exclude</option><option value="include"${rule.mode==='include'?' selected':''}>Include</option></select>
+    <select class="arField"><option value="">— field —</option>${cols.map(col=>`<option value="${escH(col)}"${rule.field===col?' selected':''}>${escH(col)}</option>`).join('')}</select>
+    <select class="arOp">${ops.map(([v,l])=>`<option value="${v}"${rule.op===v?' selected':''}>${l}</option>`).join('')}</select>
+    ${noVal?'':`<input class="arVal" type="${rule.op==='before'||rule.op==='after'?'date':'text'}" value="${escH(rule.value||'')}" placeholder="value" style="min-width:140px">`}
+    <button class="btn arDel" title="Remove rule" style="padding:4px 9px">✕</button>
+  </div>`; }
+function openDrawer(src){ STATE._drawer=src; $('#drawer').hidden=false; $('#drawerBack').hidden=false; buildDrawer(src); }
+function closeDrawer(){ STATE._drawer=null; $('#drawer').hidden=true; $('#drawerBack').hidden=true; }
+function buildDrawer(src){ const body=$('#drawerBody'); if(!body || !STATE._drawer) return;
+  const rules=STATE.srcFilters[src]||[]; const qp=quickPicks(src); const isAgent=src!=='ad';
+  const intro = isAgent
+    ? `Records that fail these rules stay matched but are flagged <span class="pill invalid">invalid</span> (not a coverage gap). Rules stack with AND.`
+    : `Scope the whole analysis by any AD attribute — field → operator → value. Rules stack with AND; each include or exclude.`;
+  let health='';
+  if(isAgent){ const fld = src==='cs'?'check-in':'scan';
+    health = `<h3 style="margin-top:18px">Health threshold <span class="sub" style="font-weight:400">(last ${fld})</span></h3>
+      <p class="sub" style="margin:6px 0">Past this many days → <span class="pill noscan">unhealthy</span>. Defaults from <code>config.json</code>.</p>
+      <div class="controls">
+        <label class="sub">Servers / RHEL <input class="hInp" data-profile="server" type="number" min="1" value="${STATE.health.server[src]}" style="width:58px"> days</label>
+        <label class="sub">Workstations <input class="hInp" data-profile="workstation" type="number" min="1" value="${STATE.health.workstation[src]}" style="width:58px"> days</label>
+      </div>`; }
+  body.innerHTML = `<div class="drawer-head"><h3>${escH(SRC_LABEL[src])} ${isAgent?'validity':'scope'}</h3><button class="drawer-close" id="drawerX" title="Close">✕</button></div>
+    <p class="sub">${intro}</p>
+    ${qp.length?`<div class="sub" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:4px">Quick picks: ${qp.map((q,i)=>`<button class="btn qpick" data-q="${i}" style="font-size:11px;padding:3px 9px">${escH(q[0])}</button>`).join('')}</div>`:''}
+    <div id="ruleList">${rules.map((r,i)=>ruleRowHtml(r,i,src)).join('')||'<span class="sub">No rules yet.</span>'}</div>
+    <button class="btn" id="addRule" style="margin-top:8px;font-size:12px;padding:5px 11px">+ Add rule</button>
+    ${health}`;
+  $('#drawerX').addEventListener('click',closeDrawer);
+  $('#addRule').addEventListener('click',()=>{ STATE.srcFilters[src].push({mode:'exclude',field:'',op:'contains',value:''}); buildDrawer(src); });
+  body.querySelectorAll('.qpick').forEach(b=>b.addEventListener('click',e=>{ const q=qp[+e.target.dataset.q]; STATE.srcFilters[src].push({mode:q[2],field:q[1],op:q[3],value:q[4]}); render(); }));
+  $('#ruleList').addEventListener('change',e=>{ const row=e.target.closest('.adrule'); if(!row)return; const rule=STATE.srcFilters[src][+row.dataset.i]; if(!rule)return;
+    if(e.target.classList.contains('arMode')) rule.mode=e.target.value;
+    else if(e.target.classList.contains('arField')){ rule.field=e.target.value; rule.op=AD_OPS[rule.field?adFieldType(rule.field,src):'text'][0][0]; }
+    else if(e.target.classList.contains('arOp')) rule.op=e.target.value;
+    else if(e.target.classList.contains('arVal')) rule.value=e.target.value;
+    render(); });
+  $('#ruleList').addEventListener('click',e=>{ if(!e.target.classList.contains('arDel'))return; STATE.srcFilters[src].splice(+e.target.closest('.adrule').dataset.i,1); render(); });
+  body.querySelectorAll('.hInp').forEach(inp=>inp.addEventListener('change',e=>{ STATE.health[e.target.dataset.profile][src]=Math.max(1,parseInt(e.target.value)||2); render(); }));
+}
+$('#drawerBack') && $('#drawerBack').addEventListener('click',closeDrawer);
+document.addEventListener('keydown',e=>{ if(e.key==='Escape' && STATE._drawer) closeDrawer(); });
 
 // ---------- matching helpers ----------
 const norm = h => String(h==null?'':h).trim().split('.')[0].toUpperCase();
@@ -240,7 +304,8 @@ function buildModel(){
       const prof = STATE.health[healthProfile(type)] || {};
       const thr = prof[k]!=null ? prof[k] : 2;
       const unhealthy = hf ? (healthDays==null || healthDays>thr) : false;   // present but health signal stale
-      cov[k]={present:true, rec, days, stale: days!=null && days>STALE, healthDays, hasHealth:!!hf, unhealthy}; }
+      const invalid = STATE.srcFilters[k].length ? !passesFilters(rec,k) : false;   // matched but fails this source's validity rules
+      cov[k]={present:true, rec, days, stale: days!=null && days>STALE, healthDays, hasHealth:!!hf, unhealthy, invalid}; }
       else cov[k]={present:false}; });
     const nAgents = AKEYS.filter(k=>cov[k].present).length;
     const spn = adField(r,[adSpnCol]);
@@ -279,7 +344,7 @@ function render(){
     if(STATE.ouSel.size){ const inSet=STATE.ouSel.has(c.ou);
       if(STATE.ouMode==='include' && !inSet) return false;
       if(STATE.ouMode==='exclude' && inSet) return false; }
-    if(STATE.adFilters.length && !passesAdFilters(c.raw)) return false;
+    if(STATE.srcFilters.ad.length && !passesFilters(c.raw,'ad')) return false;
     return true;
   });
   const denom = inScope.length || 1;
@@ -347,62 +412,16 @@ function render(){
     $('#ouNone').addEventListener('click',()=>{ STATE.ouSel.clear(); $('#ouList').querySelectorAll('.ouChk').forEach(c=>c.checked=false); dirty=true; });
   })();
 
-  // ---- generic AD attribute filters (rule builder + quick picks) ----
-  const adCols = STATE.adCols || [];
-  const fcol = pats => findCol(adCols, pats);
-  const QUICK = [
-    ['Exclude cluster SPNs', fcol([/serviceprincipalname/i]), 'exclude', 'contains', 'MSServerCluster'],
-    ['Exclude “decom” (Description)', fcol([/description/i]), 'exclude', 'contains', 'decom'],
-    ['Exclude stale password >60d', fcol([/passwordlastset|pwdlastset/i]), 'exclude', 'older', '60'],
-    ['Servers only (OS)', fcol([/operatingsystem$/i,/^os$/i]), 'include', 'contains', 'server'],
-  ].filter(q=>q[1]);
-  const ruleRow = (rule,i)=>{ const t = rule.field ? adFieldType(rule.field) : 'text'; const ops = AD_OPS[t];
-    const noVal = rule.op==='empty' || t==='bool';
-    return `<div class="adrule" data-i="${i}" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px">
-      <select class="arMode"><option value="exclude"${rule.mode!=='include'?' selected':''}>Exclude</option><option value="include"${rule.mode==='include'?' selected':''}>Include</option></select>
-      <select class="arField"><option value="">— field —</option>${adCols.map(col=>`<option value="${escH(col)}"${rule.field===col?' selected':''}>${escH(col)}</option>`).join('')}</select>
-      <select class="arOp">${ops.map(([v,l])=>`<option value="${v}"${rule.op===v?' selected':''}>${l}</option>`).join('')}</select>
-      ${noVal?'':`<input class="arVal" type="${rule.op==='before'||rule.op==='after'?'date':'text'}" value="${escH(rule.value||'')}" placeholder="value" style="min-width:150px">`}
-      <button class="btn arDel" title="Remove rule" style="padding:4px 9px">✕</button>
-    </div>`; };
-  const nActive = STATE.adFilters.filter(ruleActive).length;
-  d.insertAdjacentHTML('beforeend', `<div class="panel" id="adFilters">
-    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-      <h3 style="margin:0">AD filters ${nActive?`<span class="pill ok" style="font-weight:600">${nActive} active</span>`:''}</h3>
-      <button id="adAddRule" class="btn" style="font-size:12px;padding:5px 11px">+ Add filter</button>
-    </div>
-    <p class="sub" style="margin:8px 0 2px">Scope the analysis by any AD attribute — field → operator → value, stacked with AND, each include or exclude. Filter on SPN, CN/Name, Description, Last Logon, Password Last Set, MemberOf, OS, and more.</p>
-    <div class="sub" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">Quick picks: ${QUICK.map((q,i)=>`<button class="btn adQuick" data-q="${i}" style="font-size:11px;padding:3px 9px">${escH(q[0])}</button>`).join('')||'<span class="sub">none available for this export</span>'}</div>
-    <div id="adRuleList">${STATE.adFilters.map(ruleRow).join('')}</div></div>`);
-  function adRerenderRules(){ render(); }
-  $('#adAddRule').addEventListener('click',()=>{ STATE.adFilters.push({mode:'exclude',field:'',op:'contains',value:''}); adRerenderRules(); });
-  $('#adFilters').querySelectorAll('.adQuick').forEach(b=>b.addEventListener('click',e=>{ const q=QUICK[+e.target.dataset.q];
-    STATE.adFilters.push({mode:q[2],field:q[1],op:q[3],value:q[4]}); adRerenderRules(); }));
-  $('#adRuleList').addEventListener('change',e=>{ const row=e.target.closest('.adrule'); if(!row) return; const rule=STATE.adFilters[+row.dataset.i]; if(!rule) return;
-    if(e.target.classList.contains('arMode')) rule.mode=e.target.value;
-    else if(e.target.classList.contains('arField')){ rule.field=e.target.value; const ops=AD_OPS[rule.field?adFieldType(rule.field):'text']; rule.op=ops[0][0]; }
-    else if(e.target.classList.contains('arOp')) rule.op=e.target.value;
-    else if(e.target.classList.contains('arVal')) rule.value=e.target.value;
-    render(); });
-  $('#adRuleList').addEventListener('click',e=>{ if(!e.target.classList.contains('arDel')) return; const row=e.target.closest('.adrule'); STATE.adFilters.splice(+row.dataset.i,1); render(); });
-
-  // agent-health thresholds — per device type × per agent day targets, editable like the Tenable dashboard's SLAs
-  const profRow = (prof, plabel) => `<div class="controls" style="margin-top:6px;align-items:center">
-    <span class="sub" style="min-width:96px;font-weight:600">${plabel}</span>` +
-    AGENTS.map(([k,label,cvar])=>{ const fld = k==='cs' ? 'check-in' : 'scan';
-      return `<label class="sub" style="display:flex;align-items:center;gap:6px"><span class="sw" style="background:var(${cvar})"></span>${label} <span class="sub">(${fld})</span>
-        <input class="healthInp" data-profile="${prof}" data-agent="${k}" type="number" min="1" value="${STATE.health[prof][k]}" style="width:54px"> days</label>`; }).join('') + `</div>`;
-  d.insertAdjacentHTML('beforeend', `<div class="panel" id="healthCfg">
-    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-      <h3 style="margin:0">Agent health thresholds</h3>
-      <button id="healthReset" class="btn" style="font-size:12px;padding:5px 11px">Reset</button>
-    </div>
-    <p class="sub" style="margin:8px 0 2px"><b style="color:var(--accent)">Edit the day values</b> to set how recently each agent must have scanned (ManageEngine / Tenable) or checked in (CrowdStrike) to count as healthy — separately for servers and workstations. Every metric recalculates instantly; an agent contacting but past its threshold shows <span class="pill noscan">unhealthy</span>. Defaults load from <code>config.json</code>.</p>
-    ${profRow('server','Servers / RHEL')}
-    ${profRow('workstation','Workstations')}</div>`);
-  $('#healthCfg').querySelectorAll('.healthInp').forEach(inp=>inp.addEventListener('change',e=>{
-    STATE.health[e.target.dataset.profile][e.target.dataset.agent]=Math.max(1,parseInt(e.target.value)||2); render(); }));
-  $('#healthReset').addEventListener('click',()=>{ STATE.health=JSON.parse(JSON.stringify(DEFAULT_HEALTH)); render(); });
+  // ---- per-source filter toolbar (opens slide-out drawers) ----
+  const fBtn=(src,label)=>{ const n=activeRuleCount(src); return `<button class="btn fbtn" data-src="${src}">${label}${n?`<span class="fbadge">${n}</span>`:''}</button>`; };
+  d.insertAdjacentHTML('beforeend', `<div class="panel"><div class="ftoolbar">
+    <span class="sub" style="font-weight:600">Filters &amp; validity</span>
+    ${fBtn('ad','AD scope')}
+    ${AGENTS.map(([k,label])=>fBtn(k,label)).join('')}
+    <span class="sub">— AD rules scope the analysis; agent rules flag matched-but-failing records as <span class="pill invalid">invalid</span>. Each agent panel also holds its health thresholds.</span>
+  </div></div>`);
+  d.querySelectorAll('.ftoolbar .fbtn').forEach(b=>b.addEventListener('click',()=>openDrawer(b.dataset.src)));
+  if(STATE._drawer) buildDrawer(STATE._drawer);   // keep an open drawer in sync after a re-render
 
   // charts
   d.insertAdjacentHTML('beforeend', `<div class="grid2">
@@ -476,6 +495,7 @@ function drawDepthChart(inScope){
 const cell = c => {
   if(!c.present) return `<span class="pill gap">✗</span>`;
   if(c.stale) return `<span class="pill stale" title="last contact ${Math.round(c.days)}d ago">stale</span>`;
+  if(c.invalid) return `<span class="pill invalid" title="present but fails this source's validity rules">invalid</span>`;
   if(c.unhealthy) return `<span class="pill noscan" title="${c.healthDays==null?'no scan / check-in on record':'last scan / check-in '+Math.round(c.healthDays)+'d ago'}">unhealthy</span>`;
   return `<span class="pill ok">✓</span>`;
 };
@@ -489,7 +509,7 @@ function buildMatrix(M, inScope){
   const html = `<div class="panel" id="matrixPanel"><h3>Coverage matrix</h3>
     <div class="controls">
       <input id="mxSearch" placeholder="Search host…" style="min-width:160px">
-      <select id="mxView"><option value="all">All in-scope</option><option value="gaps">Has a gap</option><option value="none">No coverage</option><option value="full">Fully covered</option><option value="stale">Any stale</option><option value="unhealthy">Unhealthy</option></select>
+      <select id="mxView"><option value="all">All in-scope</option><option value="gaps">Has a gap</option><option value="none">No coverage</option><option value="full">Fully covered</option><option value="stale">Any stale</option><option value="invalid">Any invalid</option><option value="unhealthy">Unhealthy</option></select>
       <select id="mxSeg"><option value="">All segments</option>${segs.map(s=>`<option>${s}</option>`).join('')}</select>
       <select id="mxDomain"><option value="">All domains</option>${domains.map(s=>`<option>${s}</option>`).join('')}</select>
       <select id="mxOu"><option value="">All OUs</option>${ous.map(s=>`<option>${s}</option>`).join('')}</select>
@@ -497,7 +517,7 @@ function buildMatrix(M, inScope){
       <select id="mxType"><option value="">All types</option>${types.map(t=>`<option>${t}</option>`).join('')}</select>
       <span class="sub" id="mxCount"></span>
     </div>
-    <div class="legend"><span><span class="sw" style="background:var(--ok)"></span>Covered</span><span><span class="sw" style="background:var(--warn)"></span>Stale contact (&gt;${STATE.staleDays}d)</span><span><span class="sw" style="background:var(--noscan)"></span>Unhealthy (scan / check-in past threshold)</span><span><span class="sw" style="background:var(--crit)"></span>Gap</span></div>
+    <div class="legend"><span><span class="sw" style="background:var(--ok)"></span>Covered</span><span><span class="sw" style="background:var(--warn)"></span>Stale contact (&gt;${STATE.staleDays}d)</span><span><span class="sw" style="background:var(--high)"></span>Invalid (fails source rules)</span><span><span class="sw" style="background:var(--noscan)"></span>Unhealthy (scan / check-in past threshold)</span><span><span class="sw" style="background:var(--crit)"></span>Gap</span></div>
     <div class="scrollwrap"><table><thead><tr>
       <th data-s="name">Computer</th><th data-s="seg">Segment</th><th data-s="domain">Domain</th><th data-s="ou">OU</th><th data-s="os">OS</th><th data-s="type">Type</th><th data-s="enabled">Enabled</th>
       ${AGENTS.map(a=>`<th data-s="cov:${a[0]}">${a[1]}</th>`).join('')}<th class="num" data-s="nAgents">Agents</th>
@@ -513,11 +533,12 @@ function buildMatrix(M, inScope){
       if(view==='none' && c.nAgents!==0) return false;
       if(view==='full' && c.nAgents!==AKEYS.length) return false;
       if(view==='stale' && !AKEYS.some(k=>c.cov[k].stale)) return false;
+      if(view==='invalid' && !AKEYS.some(k=>c.cov[k].present && c.cov[k].invalid)) return false;
       if(view==='unhealthy' && !AKEYS.some(k=>c.cov[k].present && !c.cov[k].stale && c.cov[k].unhealthy)) return false;
       return true;
     });
     if(STATE._sort){ const {k,dir}=STATE._sort;
-      const keyVal=c=>{ if(k.startsWith('cov:')){ const co=c.cov[k.slice(4)]; return co.present?(co.stale?1:co.unhealthy?2:3):0; } return c[k]; };
+      const keyVal=c=>{ if(k.startsWith('cov:')){ const co=c.cov[k.slice(4)]; return co.present?(co.stale?1:co.invalid?2:co.unhealthy?3:4):0; } return c[k]; };
       rows.sort((a,b)=>{ let x=keyVal(a),y=keyVal(b); if(typeof x==='string'){x=x.toUpperCase();y=String(y).toUpperCase();} return (x>y?1:x<y?-1:0)*dir; }); }
     $('#mxCount').textContent = rows.length.toLocaleString()+' of '+inScope.length.toLocaleString();
     $('#mxBody').innerHTML = rows.slice(0,2000).map(c=>`<tr>
@@ -678,7 +699,7 @@ function downloadFlat(kind){ if(!STATE[kind] || !STATE[kind].length){ alert('Loa
 function downloadFlatAd(){ downloadFlat('ad'); }
 
 function matrixRows(){ const ad=STATE._inScope||[];
-  const fld=(c,k)=>{ const co=c.cov[k]; return !co.present?'missing':co.stale?'stale':co.unhealthy?'unhealthy':'present'; };
+  const fld=(c,k)=>{ const co=c.cov[k]; return !co.present?'missing':co.stale?'stale':co.invalid?'invalid':co.unhealthy?'unhealthy':'present'; };
   const seen=(c,k)=>{ const co=c.cov[k]; if(!co.present) return ''; const s=STATE._M.sources[k].seen; return s?co.rec[s]:''; };
   return ad.map(c=>{ const o={ computer:c.name, segment:c.seg, domain:c.domain, ou:c.ou, os:c.os, type:c.type, enabled:c.enabled };
     AGENTS.forEach(([k,label])=>{ const key=label.toLowerCase(); o[key]=fld(c,k); o[key+'_last_seen']=seen(c,k);

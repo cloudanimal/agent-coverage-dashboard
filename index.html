@@ -96,6 +96,16 @@
   .msel-list{max-height:240px;overflow:auto;display:flex;flex-direction:column;gap:1px}
   .msel-list label{display:flex;align-items:center;gap:6px;font-size:12px;padding:3px 5px;border-radius:4px;cursor:pointer;white-space:nowrap}
   .msel-list label:hover{background:var(--panel2)}
+  .pill.invalid{background:color-mix(in srgb,var(--high) 24%,transparent);color:var(--high)}
+  .ftoolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .ftoolbar .fbtn{position:relative}
+  .fbadge{display:inline-block;margin-left:6px;font-size:10px;font-weight:700;padding:1px 6px;border-radius:100px;background:var(--accent);color:#fff}
+  .drawer-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:190}
+  .drawer{position:fixed;top:0;right:0;height:100%;width:min(460px,94vw);background:var(--panel);border-left:1px solid var(--line);z-index:200;overflow:auto;padding:18px 20px;box-shadow:-8px 0 30px rgba(0,0,0,.35)}
+  .drawer h3{margin:0}
+  .drawer-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
+  .drawer-close{background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;line-height:1}
+  .adrule select,.adrule input,.drawer select,.drawer input{background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:7px;padding:7px 10px;font-size:13px}
 </style>
 </head>
 <body>
@@ -171,6 +181,8 @@
   <div class="foot">Built for teams who can't send asset data to a SaaS. Open the Network tab — there are no uploads. · <a href="https://github.com/cloudanimal/agent-coverage-dashboard" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">source on GitHub</a></div>
 </main>
 <div id="loading"><div class="spin"></div><div id="loadingMsg" class="sub">Working…</div></div>
+<div class="drawer-backdrop" id="drawerBack" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-label="Source filters"><div id="drawerBody"></div></aside>
 <script src="app.js"></script>
 </body>
 </html>

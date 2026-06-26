@@ -166,9 +166,10 @@ function csRow(c, { contactMs }){
     'Sensor version': `7.${30+Math.floor(rnd()*12)}.${19000+Math.floor(rnd()*2000)}.0`,
     Manufacturer: manuf(),
     'Last seen': isoZ(contactMs),
+    Status: rnd()<0.04 ? 'Reduced Functionality Mode' : (rnd()<0.012 ? 'Contained' : 'Normal'),   // real Falcon exports carry a sensor status
   };
 }
-const CS_COLS = ['Hostname','IP address history','OS version','Sensor version','Manufacturer','Last seen'];
+const CS_COLS = ['Hostname','IP address history','OS version','Sensor version','Manufacturer','Last seen','Status'];
 
 // ---- agent sources (subsets of REAL systems) + orphans ----
 const me=[], ten=[], cs=[];
