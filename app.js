@@ -457,14 +457,14 @@ function render(){
   // charts
   d.insertAdjacentHTML('beforeend', `<div class="grid2">
     <div class="panel"><h3>Coverage by agent <span class="sub">— healthy / unhealthy / invalid / stale / gap</span></h3><div class="chartbox"><canvas id="cAgent"></canvas></div></div>
-    <div class="panel"><h3>Healthy coverage by segment <span class="sub">— % covered by a valid, healthy agent</span></h3><div class="chartbox"><canvas id="cSeg"></canvas></div></div>
+    <div class="panel"><h3>Healthy coverage by domain <span class="sub">— % covered by a valid, healthy agent</span></h3><div class="chartbox"><canvas id="cDom"></canvas></div></div>
   </div>
   <div class="grid2">
     <div class="panel"><h3>Healthy coverage by OS / type</h3><div class="chartbox"><canvas id="cType"></canvas></div></div>
     <div class="panel"><h3>Coverage depth <span class="sub">— how many agents each host has</span></h3><div class="chartbox"><canvas id="cDepth"></canvas></div></div>
   </div>`);
   drawAgentChart(inScope, denom);
-  drawSegChart(inScope);
+  drawDomainChart(inScope);
   drawTypeChart(inScope);
   drawDepthChart(inScope);
 
@@ -494,11 +494,11 @@ function drawAgentChart(inScope, denom){
     options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:chartTick()}}},
       scales:{x:{stacked:true,grid:{display:false},ticks:{color:chartTick()}},y:{stacked:true,grid:{color:chartGrid()},ticks:{color:chartTick()}}}}}));
 }
-function drawSegChart(inScope){
-  const segs=[...new Set(inScope.map(c=>c.seg))].sort();
-  CHARTS.push(new Chart($('#cSeg'),{type:'bar',
-    data:{labels:segs,datasets:AGENTS.map(([k,label,col])=>({label,backgroundColor:cssvar(col),
-      data:segs.map(s=>{ const rows=inScope.filter(c=>c.seg===s); return pct(rows.filter(c=>isHealthy(c,k)).length, rows.length); }) }))},
+function drawDomainChart(inScope){
+  const doms=[...new Set(inScope.map(c=>c.domain))].filter(Boolean).sort();
+  CHARTS.push(new Chart($('#cDom'),{type:'bar',
+    data:{labels:doms,datasets:AGENTS.map(([k,label,col])=>({label,backgroundColor:cssvar(col),
+      data:doms.map(s=>{ const rows=inScope.filter(c=>c.domain===s); return pct(rows.filter(c=>isHealthy(c,k)).length, rows.length); }) }))},
     options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:chartTick()}},tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.parsed.y+'% healthy'}}},
       scales:{x:{grid:{display:false},ticks:{color:chartTick()}},y:{max:100,grid:{color:chartGrid()},ticks:{color:chartTick(),callback:v=>v+'%'}}}}}));
 }
