@@ -2,8 +2,10 @@
 // ---------- state ----------
 const STATE = { ad:[], me:[], ten:[], cs:[], adCols:[], src:{}, staleDays:30, denom:'enabled',
   excludeNonReal:true, logonFilter:true, logonDays:15, cbTheme:'default',
-  // agent health = recency of the last *successful scan* (distinct from last contact). Servers scan daily → tighter.
-  scanHealthSrv:2, scanHealthWks:14 };
+  // agent health = recency of each agent's scan (or check-in for CrowdStrike, which has no scan),
+  // configurable per agent like the Tenable dashboard's per-severity SLA day targets.
+  healthDays:{ me:2, ten:2, cs:2 } };
+const DEFAULT_HEALTH_DAYS = { me:2, ten:2, cs:2 };
 const $ = s => document.querySelector(s);
 const fmt = n => (n==null?'—':Number(n).toLocaleString());
 const pct = (a,b) => b? Math.round(a/b*100) : 0;
@@ -117,6 +119,9 @@ const norm = h => String(h==null?'':h).trim().split('.')[0].toUpperCase();
 function findCol(cols, patterns){ for(const p of patterns){ const c=cols.find(c=>p.test(c)); if(c) return c; } return null; }
 const daysSince = v => { if(!v) return null; const t=new Date(v).getTime(); return isNaN(t)? null : (Date.now()-t)/86400000; };
 function ouTokens(dn){ return (String(dn||'').match(/OU=([^,]+)/gi)||[]).map(s=>s.slice(3)); }
+function dcDomain(dn){ return (String(dn||'').match(/DC=([^,]+)/gi)||[]).map(s=>s.slice(3)).join('.'); }
+function dnsDomain(host){ const p=String(host||'').split('.'); return p.length>1 ? p.slice(1).join('.') : ''; }
+function ouPath(dn){ return ouTokens(dn).slice().reverse().join('/'); }   // outermost → innermost
 function adField(r, names){ for(const n of names){ if(r[n]!=null && r[n]!=='') return r[n]; } return ''; }
 
 // column maps per source (tolerant of naming drift)
@@ -153,8 +158,11 @@ function buildModel(){
   const ad = STATE.ad.map(r=>{
     const name = adField(r,[adNameCol]) || '';
     const key = norm(name);
-    const toks = ouTokens(adField(r,[adDnCol]));
+    const dn = adField(r,[adDnCol]);
+    const toks = ouTokens(dn);
     const seg = toks.find(t=>/^bu[\s_-]?\d+$/i.test(t)) || toks.find(t=>!/^(servers?|workstations?|computers?)$/i.test(t)) || '—';
+    const domain = dnsDomain(adField(r,[adDnsCol])) || dcDomain(dn) || '—';   // DNS domain (per-BU), else AD DC path
+    const ou = ouPath(dn) || '—';
     const osStr = adField(r,[adOsCol])||'';
     const type = /windows server/i.test(osStr) ? 'Windows Server'
       : /windows (10|11|7|8)/i.test(osStr) ? 'Windows Workstation'
@@ -162,21 +170,22 @@ function buildModel(){
       : 'Other';
     const enabledRaw = adField(r,[adEnCol]); const enabled = /true|1|yes/i.test(String(enabledRaw)) || enabledRaw===true;
     const os = adField(r,[adOsCol]) || '—';
-    const scanThr = type==='Windows Workstation' ? STATE.scanHealthWks : STATE.scanHealthSrv;  // servers/RHEL = tight, wks = loose
     const cov = {};
     AKEYS.forEach(k=>{ const rec=idx[k].get(key); if(rec){ matched[k].add(key);
       const s=sources[k].seen; const days = s? daysSince(rec[s]) : null;
-      const sc=sources[k].scan; const canScan=!!sc; const scanDays = sc? daysSince(rec[sc]) : null;
-      // health: a present agent that hasn't completed a successful scan within the (type-aware) threshold
-      const notScanning = canScan && (scanDays==null || scanDays>scanThr);
-      cov[k]={present:true, rec, days, stale: days!=null && days>STALE, canScan, scanDays, notScanning}; }
+      // health: ManageEngine/Tenable use last successful scan; CrowdStrike has no scan → use check-in (last seen)
+      const hf = (k==='cs') ? sources[k].seen : sources[k].scan;
+      const healthDays = hf ? daysSince(rec[hf]) : null;
+      const thr = (STATE.healthDays && STATE.healthDays[k]!=null) ? STATE.healthDays[k] : 2;
+      const unhealthy = hf ? (healthDays==null || healthDays>thr) : false;   // present but health signal stale
+      cov[k]={present:true, rec, days, stale: days!=null && days>STALE, healthDays, hasHealth:!!hf, unhealthy}; }
       else cov[k]={present:false}; });
     const nAgents = AKEYS.filter(k=>cov[k].present).length;
     const spn = adField(r,[adSpnCol]);
     const isReal = !!String(os).trim() && os!=='—' && !/cluster/i.test(String(spn));
     const logonDays = daysSince(adField(r,[adLogonCol]));
-    return { name, key, seg, type, os, enabled, cov, nAgents, isReal, logonDays,
-      lastLogon: adField(r,[adLogonCol]), dn: adField(r,[adDnCol]), raw:r };
+    return { name, key, seg, domain, ou, type, os, enabled, cov, nAgents, isReal, logonDays,
+      lastLogon: adField(r,[adLogonCol]), dn, raw:r };
   });
 
   // orphans: agent records with no matching AD computer
@@ -215,8 +224,8 @@ function render(){
   const none  = inScope.filter(c=>c.nAgents===0).length;
   const noEdr = inScope.filter(c=>!c.cov.cs.present).length;
   const single= inScope.filter(c=>c.nAgents===1).length;
-  // scan-health: scanner agents that are contacting fine but haven't completed a successful scan within threshold
-  const notScanning = inScope.reduce((n,c)=>n+AKEYS.filter(k=>c.cov[k].present && !c.cov[k].stale && c.cov[k].notScanning).length,0);
+  // agent health: present & contacting fine, but the agent's scan (or check-in for CrowdStrike) is older than its threshold
+  const unhealthy = inScope.reduce((n,c)=>n+AKEYS.filter(k=>c.cov[k].present && !c.cov[k].stale && c.cov[k].unhealthy).length,0);
 
   const d = $('#dashboard'); d.innerHTML='';
   if(!STATE.built) window.scrollTo({top:0});   // only jump to top on the first build, not on filter re-renders
@@ -229,7 +238,7 @@ function render(){
   cards += kpi('No coverage', fmt(none), 'in-scope, 0 agents', none? 'var(--crit)':null);
   cards += kpi('No EDR (CrowdStrike)', fmt(noEdr), pct(noEdr,denom)+'% of in-scope', noEdr? 'var(--crit)':null);
   cards += kpi('Single-agent hosts', fmt(single), `only 1 of ${AKEYS.length} agents`, single? 'var(--warn)':null);
-  cards += kpi('Not scanning', fmt(notScanning), `present but no scan in ${STATE.scanHealthSrv}d srv / ${STATE.scanHealthWks}d wks`, notScanning? 'var(--noscan)':null);
+  cards += kpi('Unhealthy agents', fmt(unhealthy), `present but scan / check-in past threshold`, unhealthy? 'var(--noscan)':null);
   cards += kpi('Orphan agents', fmt(M.orphans.length), 'agents with no AD match', M.orphans.length?'var(--warn)':null);
   d.insertAdjacentHTML('beforeend', `<div class="cards">${cards}</div>`);
 
@@ -240,15 +249,27 @@ function render(){
     <label class="sub" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="realChk"${STATE.excludeNonReal?' checked':''}> Real systems only <span class="sub" title="Excludes objects with no OperatingSystem or a cluster service principal name (cluster name objects, aliases)">(exclude cluster/alias)</span></label>
     <label class="sub" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="logonChk"${STATE.logonFilter?' checked':''}> Logged on within <input id="logonDays" type="number" min="1" value="${STATE.logonDays}" style="width:58px"> days</label>
     <label class="sub">Stale threshold <input id="staleInp" type="number" min="1" value="${STATE.staleDays}" style="width:64px"> days</label>
-    <label class="sub" title="Agent health = recency of the last successful scan. Servers scan daily so use a tight window; workstations roam.">Scan health: server <input id="scanSrvInp" type="number" min="1" value="${STATE.scanHealthSrv}" style="width:50px"> / wks <input id="scanWksInp" type="number" min="1" value="${STATE.scanHealthWks}" style="width:50px"> days</label>
-  </div><div class="sub">Scope = ${fmt(denom)} of ${fmt(M.ad.length)} AD objects (excluded: ${STATE.excludeNonReal?fmt(nNonReal)+' cluster/alias':'none'}${STATE.logonFilter?', plus anything not logged on in '+STATE.logonDays+'d':''}). An agent is “stale” if its last <em>contact</em> is older than the stale threshold; “no scan” if it is contacting but its last <em>successful scan</em> is older than the scan-health threshold (CrowdStrike has no scan, so it is exempt).</div></div>`);
+  </div><div class="sub">Scope = ${fmt(denom)} of ${fmt(M.ad.length)} AD objects (excluded: ${STATE.excludeNonReal?fmt(nNonReal)+' cluster/alias':'none'}${STATE.logonFilter?', plus anything not logged on in '+STATE.logonDays+'d':''}). An agent is “stale” if its last <em>contact</em> is older than the stale threshold.</div></div>`);
   $('#denomSel').addEventListener('change',e=>{ STATE.denom=e.target.value; render(); });
   $('#realChk').addEventListener('change',e=>{ STATE.excludeNonReal=e.target.checked; render(); });
   $('#logonChk').addEventListener('change',e=>{ STATE.logonFilter=e.target.checked; render(); });
   $('#logonDays').addEventListener('change',e=>{ STATE.logonDays=Math.max(1,parseInt(e.target.value)||15); render(); });
   $('#staleInp').addEventListener('change',e=>{ STATE.staleDays=Math.max(1,parseInt(e.target.value)||30); render(); });
-  $('#scanSrvInp').addEventListener('change',e=>{ STATE.scanHealthSrv=Math.max(1,parseInt(e.target.value)||2); render(); });
-  $('#scanWksInp').addEventListener('change',e=>{ STATE.scanHealthWks=Math.max(1,parseInt(e.target.value)||14); render(); });
+
+  // agent-health thresholds — per-agent day targets, editable like the Tenable dashboard's SLAs
+  const hk = AGENTS.map(([k,label])=>{ const fld = k==='cs' ? 'check-in' : 'scan';
+    return `<label class="sub" style="display:flex;align-items:center;gap:6px"><span class="sw" style="background:var(${AGENTS.find(a=>a[0]===k)[2]})"></span>${label} <span class="sub">(${fld})</span>
+      <input class="healthInp" data-agent="${k}" type="number" min="1" value="${STATE.healthDays[k]}" style="width:54px"> days</label>`; }).join('');
+  d.insertAdjacentHTML('beforeend', `<div class="panel" id="healthCfg">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">Agent health thresholds</h3>
+      <button id="healthReset" class="btn" style="font-size:12px;padding:5px 11px">Reset</button>
+    </div>
+    <p class="sub" style="margin:8px 0 2px"><b style="color:var(--accent)">Edit the day values</b> to set how recently each agent must have scanned (ManageEngine / Tenable) or checked in (CrowdStrike) to count as healthy — every metric recalculates instantly. An agent that is contacting but past its threshold shows <span class="pill noscan">unhealthy</span>.</p>
+    <div class="controls" style="margin-top:8px">${hk}</div></div>`);
+  $('#healthCfg').querySelectorAll('.healthInp').forEach(inp=>inp.addEventListener('change',e=>{
+    STATE.healthDays[e.target.dataset.agent]=Math.max(1,parseInt(e.target.value)||2); render(); }));
+  $('#healthReset').addEventListener('click',()=>{ STATE.healthDays={...DEFAULT_HEALTH_DAYS}; render(); });
 
   // charts
   d.insertAdjacentHTML('beforeend', `<div class="grid2">
@@ -322,53 +343,58 @@ function drawDepthChart(inScope){
 const cell = c => {
   if(!c.present) return `<span class="pill gap">✗</span>`;
   if(c.stale) return `<span class="pill stale" title="last contact ${Math.round(c.days)}d ago">stale</span>`;
-  if(c.notScanning) return `<span class="pill noscan" title="${c.scanDays==null?'no successful scan on record':'last successful scan '+Math.round(c.scanDays)+'d ago'}">no scan</span>`;
+  if(c.unhealthy) return `<span class="pill noscan" title="${c.healthDays==null?'no scan / check-in on record':'last scan / check-in '+Math.round(c.healthDays)+'d ago'}">unhealthy</span>`;
   return `<span class="pill ok">✓</span>`;
 };
 function buildMatrix(M, inScope){
   const segs=[...new Set(M.ad.map(c=>c.seg))].sort();
+  const domains=[...new Set(M.ad.map(c=>c.domain))].filter(Boolean).sort();
+  const ous=[...new Set(M.ad.map(c=>c.ou))].filter(Boolean).sort();
   const oses=[...new Set(M.ad.map(c=>c.os))].sort();
   const TYPE_ORDER=['Windows Server','Windows Workstation','RHEL','Other'];
   const types=TYPE_ORDER.filter(t=>M.ad.some(c=>c.type===t));
   const html = `<div class="panel" id="matrixPanel"><h3>Coverage matrix</h3>
     <div class="controls">
       <input id="mxSearch" placeholder="Search host…" style="min-width:160px">
-      <select id="mxView"><option value="all">All in-scope</option><option value="gaps">Has a gap</option><option value="none">No coverage</option><option value="full">Fully covered</option><option value="stale">Any stale</option><option value="noscan">Not scanning</option></select>
+      <select id="mxView"><option value="all">All in-scope</option><option value="gaps">Has a gap</option><option value="none">No coverage</option><option value="full">Fully covered</option><option value="stale">Any stale</option><option value="unhealthy">Unhealthy</option></select>
       <select id="mxSeg"><option value="">All segments</option>${segs.map(s=>`<option>${s}</option>`).join('')}</select>
+      <select id="mxDomain"><option value="">All domains</option>${domains.map(s=>`<option>${s}</option>`).join('')}</select>
+      <select id="mxOu"><option value="">All OUs</option>${ous.map(s=>`<option>${s}</option>`).join('')}</select>
       <select id="mxOs"><option value="">All OS</option>${oses.map(s=>`<option>${s}</option>`).join('')}</select>
       <select id="mxType"><option value="">All types</option>${types.map(t=>`<option>${t}</option>`).join('')}</select>
       <span class="sub" id="mxCount"></span>
     </div>
-    <div class="legend"><span><span class="sw" style="background:var(--ok)"></span>Covered</span><span><span class="sw" style="background:var(--warn)"></span>Stale contact (&gt;${STATE.staleDays}d)</span><span><span class="sw" style="background:var(--noscan)"></span>No scan (&gt;${STATE.scanHealthSrv}d srv/${STATE.scanHealthWks}d wks)</span><span><span class="sw" style="background:var(--crit)"></span>Gap</span></div>
+    <div class="legend"><span><span class="sw" style="background:var(--ok)"></span>Covered</span><span><span class="sw" style="background:var(--warn)"></span>Stale contact (&gt;${STATE.staleDays}d)</span><span><span class="sw" style="background:var(--noscan)"></span>Unhealthy (scan / check-in past threshold)</span><span><span class="sw" style="background:var(--crit)"></span>Gap</span></div>
     <div class="scrollwrap"><table><thead><tr>
-      <th data-s="name">Computer</th><th data-s="seg">Segment</th><th data-s="os">OS</th><th data-s="type">Type</th><th data-s="enabled">Enabled</th>
+      <th data-s="name">Computer</th><th data-s="seg">Segment</th><th data-s="domain">Domain</th><th data-s="ou">OU</th><th data-s="os">OS</th><th data-s="type">Type</th><th data-s="enabled">Enabled</th>
       ${AGENTS.map(a=>`<th data-s="cov:${a[0]}">${a[1]}</th>`).join('')}<th class="num" data-s="nAgents">Agents</th>
     </tr></thead><tbody id="mxBody"></tbody></table></div></div>`;
   $('#dashboard').insertAdjacentHTML('beforeend', html);
   const fill = ()=>{
-    const q=$('#mxSearch').value.trim().toUpperCase(), view=$('#mxView').value, seg=$('#mxSeg').value, os=$('#mxOs').value, type=$('#mxType').value;
+    const q=$('#mxSearch').value.trim().toUpperCase(), view=$('#mxView').value, seg=$('#mxSeg').value, domain=$('#mxDomain').value, ou=$('#mxOu').value, os=$('#mxOs').value, type=$('#mxType').value;
     let rows = inScope.filter(c=>{
       if(q && !c.name.toUpperCase().includes(q)) return false;
-      if(seg && c.seg!==seg) return false; if(os && c.os!==os) return false; if(type && c.type!==type) return false;
+      if(seg && c.seg!==seg) return false; if(domain && c.domain!==domain) return false; if(ou && c.ou!==ou) return false;
+      if(os && c.os!==os) return false; if(type && c.type!==type) return false;
       if(view==='gaps' && c.nAgents===AKEYS.length) return false;
       if(view==='none' && c.nAgents!==0) return false;
       if(view==='full' && c.nAgents!==AKEYS.length) return false;
       if(view==='stale' && !AKEYS.some(k=>c.cov[k].stale)) return false;
-      if(view==='noscan' && !AKEYS.some(k=>c.cov[k].present && !c.cov[k].stale && c.cov[k].notScanning)) return false;
+      if(view==='unhealthy' && !AKEYS.some(k=>c.cov[k].present && !c.cov[k].stale && c.cov[k].unhealthy)) return false;
       return true;
     });
     if(STATE._sort){ const {k,dir}=STATE._sort;
-      const keyVal=c=>{ if(k.startsWith('cov:')){ const co=c.cov[k.slice(4)]; return co.present?(co.stale?1:co.notScanning?2:3):0; } return c[k]; };
+      const keyVal=c=>{ if(k.startsWith('cov:')){ const co=c.cov[k.slice(4)]; return co.present?(co.stale?1:co.unhealthy?2:3):0; } return c[k]; };
       rows.sort((a,b)=>{ let x=keyVal(a),y=keyVal(b); if(typeof x==='string'){x=x.toUpperCase();y=String(y).toUpperCase();} return (x>y?1:x<y?-1:0)*dir; }); }
     $('#mxCount').textContent = rows.length.toLocaleString()+' of '+inScope.length.toLocaleString();
     $('#mxBody').innerHTML = rows.slice(0,2000).map(c=>`<tr>
-      <td>${c.name}</td><td>${c.seg}</td><td style="font-size:12px">${c.os}</td><td>${c.type}</td>
+      <td>${c.name}</td><td>${c.seg}</td><td style="font-size:12px">${c.domain}</td><td style="font-size:12px">${c.ou}</td><td style="font-size:12px">${c.os}</td><td>${c.type}</td>
       <td>${c.enabled?'<span class="pill ok">Yes</span>':'<span class="pill muted">No</span>'}</td>
       ${AGENTS.map(a=>`<td>${cell(c.cov[a[0]])}</td>`).join('')}
       <td class="num">${c.nAgents===AKEYS.length?`<span class="pill ok">${AKEYS.length}/${AKEYS.length}</span>`:c.nAgents===0?`<span class="pill gap">0/${AKEYS.length}</span>`:c.nAgents+'/'+AKEYS.length}</td></tr>`).join('')
-      + (rows.length>2000?`<tr><td colspan="9" class="sub">Showing first 2,000 of ${rows.length.toLocaleString()} — refine filters or export the full set.</td></tr>`:'');
+      + (rows.length>2000?`<tr><td colspan="${8+AKEYS.length}" class="sub">Showing first 2,000 of ${rows.length.toLocaleString()} — refine filters or export the full set.</td></tr>`:'');
   };
-  ['mxSearch','mxView','mxSeg','mxOs','mxType'].forEach(id=>$('#'+id).addEventListener('input',fill));
+  ['mxSearch','mxView','mxSeg','mxDomain','mxOu','mxOs','mxType'].forEach(id=>$('#'+id).addEventListener('input',fill));
   $('#matrixPanel').querySelectorAll('th[data-s]').forEach(th=>{ th.style.cursor='pointer';
     th.addEventListener('click',()=>{
       const k=th.dataset.s; STATE._sort = STATE._sort && STATE._sort.k===k ? {k,dir:-STATE._sort.dir} : {k,dir:1};
@@ -519,10 +545,11 @@ function downloadFlat(kind){ if(!STATE[kind] || !STATE[kind].length){ alert('Loa
 function downloadFlatAd(){ downloadFlat('ad'); }
 
 function matrixRows(){ const ad=STATE._inScope||[];
-  const fld=(c,k)=>c.cov[k].present?(c.cov[k].stale?'stale':'present'):'missing';
+  const fld=(c,k)=>{ const co=c.cov[k]; return !co.present?'missing':co.stale?'stale':co.unhealthy?'unhealthy':'present'; };
   const seen=(c,k)=>{ const co=c.cov[k]; if(!co.present) return ''; const s=STATE._M.sources[k].seen; return s?co.rec[s]:''; };
-  return ad.map(c=>{ const o={ computer:c.name, segment:c.seg, os:c.os, type:c.type, enabled:c.enabled };
-    AGENTS.forEach(([k,label])=>{ const key=label.toLowerCase(); o[key]=fld(c,k); o[key+'_last_seen']=seen(c,k); });
+  return ad.map(c=>{ const o={ computer:c.name, segment:c.seg, domain:c.domain, ou:c.ou, os:c.os, type:c.type, enabled:c.enabled };
+    AGENTS.forEach(([k,label])=>{ const key=label.toLowerCase(); o[key]=fld(c,k); o[key+'_last_seen']=seen(c,k);
+      o[key+'_health_days']=c.cov[k].present&&c.cov[k].healthDays!=null?Math.round(c.cov[k].healthDays):''; });
     o.agents=c.nAgents+'/'+AKEYS.length; return o; }); }
 function objCols(objs){ return objs.length? Object.keys(objs[0]) : []; }
 function objRows(objs,cols){ return objs.map(o=>cols.map(c=>o[c])); }

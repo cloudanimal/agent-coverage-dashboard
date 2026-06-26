@@ -176,7 +176,8 @@ real.forEach(c=>{
     AgentId:[...Array(32)].map(()=>'0123456789abcdef'[Math.floor(rnd()*16)]).join(''),
     Groups:`${c.seg}-Agents`, LastConnectUtc:iso(daysAgoMs(stale?30+rnd()*90:rnd()*2)),
     LastScannedUtc:iso(daysAgoMs(stale?40+rnd()*90:(rnd()<0.15?3+rnd()*37:rnd()*1.5))), RestartPending: rnd()<0.05?'True':'False' }); }
-  if(has(c,0.83)){ cs.push(csRow(c,{ contactMs:daysAgoMs(rnd()<0.06?30+rnd()*60:rnd()*2) })); }
+  // CrowdStrike check-in: mostly fresh, ~6% stale (>30d), ~12% a 3-12d tail → "unhealthy" vs a 2d check-in threshold
+  if(has(c,0.83)){ cs.push(csRow(c,{ contactMs:daysAgoMs(rnd()<0.06 ? 30+rnd()*60 : rnd()<0.12 ? 3+rnd()*9 : rnd()*1.5) })); }
 });
 for(let i=0;i<40;i++){ const nm=`OLD-PC${pad(i,3)}`;
   me.push(meRow({ name:nm, dns:`${nm.toLowerCase()}.corp.local`, ip:'', os:'Windows Server 2012 R2 Standard', seg:'DECOM', type:'Server' },
