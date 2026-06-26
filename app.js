@@ -3,6 +3,7 @@
 const STATE = { ad:[], me:[], ten:[], cs:[], adCols:[], src:{}, staleDays:30, denom:'enabled',
   excludeNonReal:true, logonFilter:true, logonDays:15, cbTheme:'default',
   ouMode:'exclude', ouSel:new Set(),   // OU scope: include-only or exclude the selected OUs from the whole analysis
+  grpMode:'include', grpSel:new Set(),  // AD group (MemberOf) scope
   // per-source filter rules {mode, field, op, value}. AD rules scope the denominator;
   // agent rules flag matched-but-failing records as "invalid" (still present, not a gap).
   srcFilters:{ ad:[], me:[], ten:[], cs:[] }, _drawer:null,
@@ -248,6 +249,39 @@ function ouTokens(dn){ return (String(dn||'').match(/OU=([^,]+)/gi)||[]).map(s=>
 function dcDomain(dn){ return (String(dn||'').match(/DC=([^,]+)/gi)||[]).map(s=>s.slice(3)).join('.'); }
 function dnsDomain(host){ const p=String(host||'').split('.'); return p.length>1 ? p.slice(1).join('.') : ''; }
 function ouPath(dn){ return ouTokens(dn).slice().reverse().join('/'); }   // outermost → innermost
+function cnOf(dn){ const m=String(dn||'').match(/CN=([^,]+)/i); return m?m[1].trim():String(dn||'').trim(); }   // group name from a MemberOf DN
+function memberGroups(val){ return String(val||'').split(/;\s*/).map(s=>s.trim()).filter(Boolean).map(cnOf); }
+
+// ---------- reusable searchable include/exclude multi-select (used for OUs and AD groups) ----------
+function mselHtml(cfg){   // cfg: {id, btnLabel, mode, sel, values, noun}
+  const checks = cfg.values.map(v=>`<label title="${escH(v)}"><input type="checkbox" class="${cfg.id}Chk" value="${escH(v)}"${cfg.sel.has(v)?' checked':''}> <span>${escH(v)}</span></label>`).join('');
+  return `<div class="msel" id="${cfg.id}Scope">
+    <button class="btn" type="button" id="${cfg.id}Btn">${cfg.btnLabel}</button>
+    <div class="msel-pop" id="${cfg.id}Pop" hidden>
+      <div class="msel-head">
+        <span class="modes"><label><input type="radio" name="${cfg.id}Mode" value="include"${cfg.mode==='include'?' checked':''}> Include only</label><label><input type="radio" name="${cfg.id}Mode" value="exclude"${cfg.mode==='exclude'?' checked':''}> Exclude</label></span>
+        <span><a id="${cfg.id}All">All</a> · <a id="${cfg.id}None">None</a></span>
+      </div>
+      <input class="msel-search" id="${cfg.id}Search" placeholder="Filter ${cfg.values.length} ${cfg.noun}…" autocomplete="off">
+      <div class="msel-list" id="${cfg.id}List">${checks||`<span class="sub">No ${cfg.noun}</span>`}</div>
+      <div class="sub" id="${cfg.id}Count" style="margin-top:6px"></div>
+    </div>
+  </div>`;
+}
+function wireMsel(cfg){   // cfg: {id, sel, setMode, valuesLen}
+  const id=cfg.id, wrap=$('#'+id+'Scope'), btn=$('#'+id+'Btn'), pop=$('#'+id+'Pop'); let dirty=false;
+  const labels=()=>[...$('#'+id+'List').querySelectorAll('label')];
+  const visChecks=()=>labels().filter(l=>l.style.display!=='none').map(l=>l.querySelector('.'+id+'Chk'));
+  const updCount=()=>{ const vis=labels().filter(l=>l.style.display!=='none').length; $('#'+id+'Count').textContent=`${cfg.sel.size} selected · ${vis} of ${cfg.valuesLen} shown`; };
+  const outside=e=>{ if(!wrap.contains(e.target)) close(); };
+  function close(){ if(pop.hidden) return; pop.hidden=true; document.removeEventListener('click',outside,true); if(dirty){ dirty=false; render(); } }
+  btn.addEventListener('click',e=>{ e.stopPropagation(); if(pop.hidden){ pop.hidden=false; updCount(); setTimeout(()=>{document.addEventListener('click',outside,true); $('#'+id+'Search').focus();},0); } else close(); });
+  $('#'+id+'Search').addEventListener('input',e=>{ const q=e.target.value.trim().toLowerCase(); labels().forEach(l=>{ l.style.display=(!q||l.textContent.toLowerCase().includes(q))?'':'none'; }); updCount(); });
+  $('#'+id+'List').addEventListener('change',e=>{ if(!e.target.classList.contains(id+'Chk'))return; const v=e.target.value; if(e.target.checked)cfg.sel.add(v); else cfg.sel.delete(v); dirty=true; updCount(); });
+  pop.querySelectorAll(`input[name=${id}Mode]`).forEach(r=>r.addEventListener('change',e=>{ cfg.setMode(e.target.value); dirty=true; }));
+  $('#'+id+'All').addEventListener('click',()=>{ visChecks().forEach(c=>{ c.checked=true; cfg.sel.add(c.value); }); dirty=true; updCount(); });
+  $('#'+id+'None').addEventListener('click',()=>{ visChecks().forEach(c=>{ c.checked=false; cfg.sel.delete(c.value); }); dirty=true; updCount(); });
+}
 function adField(r, names){ for(const n of names){ if(r[n]!=null && r[n]!=='') return r[n]; } return ''; }
 
 // column maps per source (tolerant of naming drift)
@@ -275,6 +309,7 @@ function buildModel(){
   const adDnCol   = findCol(STATE.adCols,[/distinguishedname/i]);
   const adLogonCol= findCol(STATE.adCols,[/lastlogondate/i,/lastlogontimestamp/i,/lastlogon/i]);
   const adSpnCol  = findCol(STATE.adCols,[/serviceprincipalname/i]);
+  const adGrpCol  = findCol(STATE.adCols,[/^memberof$/i,/memberof/i,/^groups?$/i]);
 
   const sources = Object.fromEntries(AKEYS.map(k=>[k, colsFor(k)]));
   // index each agent source by normalized hostname
@@ -290,6 +325,7 @@ function buildModel(){
     const seg = toks.find(t=>/^bu[\s_-]?\d+$/i.test(t)) || toks.find(t=>!/^(servers?|workstations?|computers?)$/i.test(t)) || '—';
     const domain = dnsDomain(adField(r,[adDnsCol])) || dcDomain(dn) || '—';   // DNS domain (per-BU), else AD DC path
     const ou = ouPath(dn) || '—';
+    const groups = adGrpCol ? memberGroups(r[adGrpCol]) : [];
     const osStr = adField(r,[adOsCol])||'';
     const type = /windows server/i.test(osStr) ? 'Windows Server'
       : /windows (10|11|7|8)/i.test(osStr) ? 'Windows Workstation'
@@ -313,7 +349,7 @@ function buildModel(){
     const spn = adField(r,[adSpnCol]);
     const isReal = !!String(os).trim() && os!=='—' && !/cluster/i.test(String(spn));
     const logonDays = daysSince(adField(r,[adLogonCol]));
-    return { name, key, seg, domain, ou, type, os, enabled, cov, nAgents, isReal, logonDays,
+    return { name, key, seg, domain, ou, groups, type, os, enabled, cov, nAgents, isReal, logonDays,
       lastLogon: adField(r,[adLogonCol]), dn, raw:r };
   });
 
@@ -346,6 +382,9 @@ function render(){
     if(STATE.ouSel.size){ const inSet=STATE.ouSel.has(c.ou);
       if(STATE.ouMode==='include' && !inSet) return false;
       if(STATE.ouMode==='exclude' && inSet) return false; }
+    if(STATE.grpSel.size){ const hit=c.groups.some(g=>STATE.grpSel.has(g));   // member of any selected group
+      if(STATE.grpMode==='include' && !hit) return false;
+      if(STATE.grpMode==='exclude' && hit) return false; }
     if(STATE.srcFilters.ad.length && !passesFilters(c.raw,'ad')) return false;
     return true;
   });
@@ -381,49 +420,28 @@ function render(){
 
   // scope + stale controls
   const allOus=[...new Set(M.ad.map(c=>c.ou))].filter(Boolean).sort();
-  const ouSelN=STATE.ouSel.size;
-  const ouBtnLabel=ouSelN ? `OUs: ${STATE.ouMode==='include'?'include':'exclude'} ${ouSelN} ▾` : 'OUs: all ▾';
-  const ouChecks=allOus.map(o=>`<label title="${escH(o)}"><input type="checkbox" class="ouChk" value="${escH(o)}"${STATE.ouSel.has(o)?' checked':''}> <span>${escH(o)}</span></label>`).join('');
+  const allGroups=[...new Set(M.ad.flatMap(c=>c.groups))].filter(Boolean).sort();
+  const ouSelN=STATE.ouSel.size, grpSelN=STATE.grpSel.size;
+  const ouLabel = ouSelN ? `OUs: ${STATE.ouMode==='include'?'include':'exclude'} ${ouSelN} ▾` : 'OUs: all ▾';
+  const grpLabel = grpSelN ? `Groups: ${STATE.grpMode==='include'?'include':'exclude'} ${grpSelN} ▾` : 'Groups: all ▾';
   const ouNote = ouSelN ? `, OU filter: ${STATE.ouMode==='include'?'include only':'exclude'} ${ouSelN} OU${ouSelN>1?'s':''}` : '';
+  const grpNote = grpSelN ? `, group filter: ${STATE.grpMode==='include'?'include only':'exclude'} ${grpSelN} group${grpSelN>1?'s':''}` : '';
   d.insertAdjacentHTML('beforeend', `<div class="panel"><div class="controls">
     <label class="sub">Coverage denominator
       <select id="denomSel"><option value="enabled"${STATE.denom==='enabled'?' selected':''}>Enabled AD computers</option><option value="all"${STATE.denom==='all'?' selected':''}>All AD computers</option></select></label>
     <label class="sub" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="realChk"${STATE.excludeNonReal?' checked':''}> Real systems only <span class="sub" title="Excludes objects with no OperatingSystem or a cluster service principal name (cluster name objects, aliases)">(exclude cluster/alias)</span></label>
     <label class="sub" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="logonChk"${STATE.logonFilter?' checked':''}> Logged on within <input id="logonDays" type="number" min="1" value="${STATE.logonDays}" style="width:58px"> days</label>
     <label class="sub">Stale threshold <input id="staleInp" type="number" min="1" value="${STATE.staleDays}" style="width:64px"> days</label>
-    <div class="msel" id="ouScope">
-      <button class="btn" type="button" id="ouScopeBtn">${ouBtnLabel}</button>
-      <div class="msel-pop" id="ouScopePop" hidden>
-        <div class="msel-head">
-          <span class="modes"><label><input type="radio" name="ouMode" value="include"${STATE.ouMode==='include'?' checked':''}> Include only</label><label><input type="radio" name="ouMode" value="exclude"${STATE.ouMode==='exclude'?' checked':''}> Exclude</label></span>
-          <span><a id="ouAll">All</a> · <a id="ouNone">None</a></span>
-        </div>
-        <input id="ouSearch" placeholder="Filter ${allOus.length} OUs…" style="width:100%;margin-bottom:6px" autocomplete="off">
-        <div class="msel-list" id="ouList">${ouChecks||'<span class="sub">No OUs</span>'}</div>
-        <div class="sub" id="ouCount" style="margin-top:6px"></div>
-      </div>
-    </div>
-  </div><div class="sub">Scope = ${fmt(denom)} of ${fmt(M.ad.length)} AD objects (excluded: ${STATE.excludeNonReal?fmt(nNonReal)+' cluster/alias':'none'}${STATE.logonFilter?', plus anything not logged on in '+STATE.logonDays+'d':''}${ouNote}). An agent is “stale” if its last <em>contact</em> is older than the stale threshold.</div></div>`);
+    ${mselHtml({id:'ou', btnLabel:ouLabel, mode:STATE.ouMode, sel:STATE.ouSel, values:allOus, noun:'OUs'})}
+    ${mselHtml({id:'grp', btnLabel:grpLabel, mode:STATE.grpMode, sel:STATE.grpSel, values:allGroups, noun:'groups'})}
+  </div><div class="sub">Scope = ${fmt(denom)} of ${fmt(M.ad.length)} AD objects (excluded: ${STATE.excludeNonReal?fmt(nNonReal)+' cluster/alias':'none'}${STATE.logonFilter?', plus anything not logged on in '+STATE.logonDays+'d':''}${ouNote}${grpNote}). An agent is “stale” if its last <em>contact</em> is older than the stale threshold.</div></div>`);
   $('#denomSel').addEventListener('change',e=>{ STATE.denom=e.target.value; render(); });
   $('#realChk').addEventListener('change',e=>{ STATE.excludeNonReal=e.target.checked; render(); });
   $('#logonChk').addEventListener('change',e=>{ STATE.logonFilter=e.target.checked; render(); });
   $('#logonDays').addEventListener('change',e=>{ STATE.logonDays=Math.max(1,parseInt(e.target.value)||15); render(); });
   $('#staleInp').addEventListener('change',e=>{ STATE.staleDays=Math.max(1,parseInt(e.target.value)||30); render(); });
-  // OU scope multi-select: searchable, toggle items freely, apply (re-render) once the popover closes
-  (function(){ const wrap=$('#ouScope'), btn=$('#ouScopeBtn'), pop=$('#ouScopePop'); let dirty=false;
-    const labels=()=>[...$('#ouList').querySelectorAll('label')];
-    const visibleChecks=()=>labels().filter(l=>l.style.display!=='none').map(l=>l.querySelector('.ouChk'));
-    function updCount(){ const vis=labels().filter(l=>l.style.display!=='none').length; $('#ouCount').textContent=`${STATE.ouSel.size} selected · ${vis} of ${allOus.length} shown`; }
-    function outside(e){ if(!wrap.contains(e.target)) close(); }
-    function close(){ if(pop.hidden) return; pop.hidden=true; document.removeEventListener('click',outside,true); if(dirty){ dirty=false; render(); } }
-    btn.addEventListener('click',e=>{ e.stopPropagation(); if(pop.hidden){ pop.hidden=false; updCount(); setTimeout(()=>{document.addEventListener('click',outside,true); $('#ouSearch').focus();},0); } else close(); });
-    $('#ouSearch').addEventListener('input',e=>{ const q=e.target.value.trim().toLowerCase();
-      labels().forEach(l=>{ l.style.display = (!q || l.textContent.toLowerCase().includes(q)) ? '' : 'none'; }); updCount(); });
-    $('#ouList').addEventListener('change',e=>{ if(!e.target.classList.contains('ouChk'))return; const v=e.target.value; if(e.target.checked)STATE.ouSel.add(v); else STATE.ouSel.delete(v); dirty=true; updCount(); });
-    pop.querySelectorAll('input[name=ouMode]').forEach(r=>r.addEventListener('change',e=>{ STATE.ouMode=e.target.value; dirty=true; }));
-    $('#ouAll').addEventListener('click',()=>{ visibleChecks().forEach(c=>{ c.checked=true; STATE.ouSel.add(c.value); }); dirty=true; updCount(); });
-    $('#ouNone').addEventListener('click',()=>{ visibleChecks().forEach(c=>{ c.checked=false; STATE.ouSel.delete(c.value); }); dirty=true; updCount(); });
-  })();
+  wireMsel({id:'ou', sel:STATE.ouSel, setMode:v=>STATE.ouMode=v, valuesLen:allOus.length});
+  wireMsel({id:'grp', sel:STATE.grpSel, setMode:v=>STATE.grpMode=v, valuesLen:allGroups.length});
 
   // ---- per-source filter toolbar (opens slide-out drawers) ----
   const fBtn=(src,label)=>{ const n=activeRuleCount(src); return `<button class="btn fbtn" data-src="${src}">${label}${n?`<span class="fbadge">${n}</span>`:''}</button>`; };
