@@ -69,6 +69,8 @@ const adJson = all.map(c=>{
     whenCreated: psDate(c.created),
     LastLogonDate: c.logon ? psDate(c.logon) : null,
     lastLogonTimestamp: c.logon ? String(c.logon*1e4) : '0',
+    // machine account passwords auto-rotate ~30d while online; offline hosts don't rotate, so pwd age tracks logon age
+    PasswordLastSet: psDate(daysAgoMs(Math.max((c.logon?(Date.now()-c.logon)/86400000:300)*0.9, rnd()*28))),
     ObjectClass: 'computer',
     ServicePrincipalName: c.real
       ? [`HOST/${c.name}`, `HOST/${c.dns}`, `TERMSRV/${c.name}`]

@@ -3,6 +3,7 @@
 const STATE = { ad:[], me:[], ten:[], cs:[], adCols:[], src:{}, staleDays:30, denom:'enabled',
   excludeNonReal:true, logonFilter:true, logonDays:15, cbTheme:'default',
   ouMode:'exclude', ouSel:new Set(),   // OU scope: include-only or exclude the selected OUs from the whole analysis
+  adFilters:[],                        // generic AD-attribute scope rules: {mode, field, op, value}
   // agent health = recency of each agent's scan (check-in for CrowdStrike, which has no scan),
   // per device type × per agent, configurable like the Tenable dashboard's SLA day targets.
   health:{ server:{me:2,ten:2,cs:2}, workstation:{me:14,ten:14,cs:7} } };
@@ -134,6 +135,45 @@ function flattenAd(text){
 }
 function unionCols(rows){ const s=new Set(); rows.forEach(r=>Object.keys(r).forEach(k=>s.add(k))); return [...s]; }
 
+// ---------- generic AD-attribute filtering ----------
+const AD_OPS = {
+  text: [['contains','contains'],['ncontains','does not contain'],['eq','equals'],['regex','matches (regex)'],['empty','is empty']],
+  date: [['older','older than (days)'],['within','within (days)'],['before','before (date)'],['after','after (date)']],
+  bool: [['true','is true'],['false','is false']],
+};
+const _adTypeCache = {};
+function adFieldType(col){
+  if(_adTypeCache[col]) return _adTypeCache[col];
+  const vals=[]; for(const r of (STATE.ad||[])){ const v=r[col]; if(v!=null&&v!==''){ vals.push(v); if(vals.length>=40) break; } }
+  let t='text';
+  if(vals.length){
+    if(vals.every(v=>typeof v==='boolean' || /^(true|false)$/i.test(String(v)))) t='bool';
+    else if(vals.every(v=>typeof v==='string' && /^\d{4}-\d\d-\d\dT/.test(v))) t='date';
+  }
+  return (_adTypeCache[col]=t);
+}
+function ruleActive(rule){ if(!rule||!rule.field) return false; const t=adFieldType(rule.field);
+  if(t==='bool'||rule.op==='empty') return true; return rule.value!=null && rule.value!==''; }
+function ruleMatch(rec, rule){
+  const raw = rec[rule.field]; const t=adFieldType(rule.field);
+  if(t==='date'){ const d=daysSince(raw);
+    if(rule.op==='within') return d!=null && d<=(parseFloat(rule.value)||0);
+    if(rule.op==='before') return raw && new Date(raw) < new Date(rule.value);
+    if(rule.op==='after')  return raw && new Date(raw) > new Date(rule.value);
+    return d!=null && d>(parseFloat(rule.value)||0);   // older
+  }
+  if(t==='bool'){ const b = raw===true || /^(true|1|yes)$/i.test(String(raw)); return rule.op==='true'?b:!b; }
+  const s=String(raw==null?'':raw).toLowerCase(), val=String(rule.value==null?'':rule.value).toLowerCase();
+  if(rule.op==='empty') return s.trim()==='';
+  if(rule.op==='eq') return s===val;
+  if(rule.op==='ncontains') return !s.includes(val);
+  if(rule.op==='regex'){ try{ return new RegExp(rule.value,'i').test(String(raw==null?'':raw)); }catch(e){ return false; } }
+  return s.includes(val);   // contains
+}
+// a row passes the AD filters if every active rule is satisfied (exclude = must NOT match)
+function passesAdFilters(rec){ return STATE.adFilters.filter(ruleActive).every(rule =>
+  rule.mode==='exclude' ? !ruleMatch(rec,rule) : ruleMatch(rec,rule)); }
+
 // ---------- matching helpers ----------
 const norm = h => String(h==null?'':h).trim().split('.')[0].toUpperCase();
 function findCol(cols, patterns){ for(const p of patterns){ const c=cols.find(c=>p.test(c)); if(c) return c; } return null; }
@@ -161,6 +201,7 @@ function colsFor(kind){
 // ---------- build the coverage model ----------
 function buildModel(){
   const STALE = STATE.staleDays;
+  for(const k in _adTypeCache) delete _adTypeCache[k];   // re-detect field types fresh each build (data may have changed)
   const adNameCol = findCol(STATE.adCols,[/^name$/i,/^cn$/i,/computer.?name/i]) || STATE.adCols[0];
   const adDnsCol  = findCol(STATE.adCols,[/dnshostname/i,/^dns/i]);
   const adEnCol   = findCol(STATE.adCols,[/^enabled$/i]);
@@ -238,6 +279,7 @@ function render(){
     if(STATE.ouSel.size){ const inSet=STATE.ouSel.has(c.ou);
       if(STATE.ouMode==='include' && !inSet) return false;
       if(STATE.ouMode==='exclude' && inSet) return false; }
+    if(STATE.adFilters.length && !passesAdFilters(c.raw)) return false;
     return true;
   });
   const denom = inScope.length || 1;
@@ -304,6 +346,45 @@ function render(){
     $('#ouAll').addEventListener('click',()=>{ allOus.forEach(o=>STATE.ouSel.add(o)); $('#ouList').querySelectorAll('.ouChk').forEach(c=>c.checked=true); dirty=true; });
     $('#ouNone').addEventListener('click',()=>{ STATE.ouSel.clear(); $('#ouList').querySelectorAll('.ouChk').forEach(c=>c.checked=false); dirty=true; });
   })();
+
+  // ---- generic AD attribute filters (rule builder + quick picks) ----
+  const adCols = STATE.adCols || [];
+  const fcol = pats => findCol(adCols, pats);
+  const QUICK = [
+    ['Exclude cluster SPNs', fcol([/serviceprincipalname/i]), 'exclude', 'contains', 'MSServerCluster'],
+    ['Exclude “decom” (Description)', fcol([/description/i]), 'exclude', 'contains', 'decom'],
+    ['Exclude stale password >60d', fcol([/passwordlastset|pwdlastset/i]), 'exclude', 'older', '60'],
+    ['Servers only (OS)', fcol([/operatingsystem$/i,/^os$/i]), 'include', 'contains', 'server'],
+  ].filter(q=>q[1]);
+  const ruleRow = (rule,i)=>{ const t = rule.field ? adFieldType(rule.field) : 'text'; const ops = AD_OPS[t];
+    const noVal = rule.op==='empty' || t==='bool';
+    return `<div class="adrule" data-i="${i}" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px">
+      <select class="arMode"><option value="exclude"${rule.mode!=='include'?' selected':''}>Exclude</option><option value="include"${rule.mode==='include'?' selected':''}>Include</option></select>
+      <select class="arField"><option value="">— field —</option>${adCols.map(col=>`<option value="${escH(col)}"${rule.field===col?' selected':''}>${escH(col)}</option>`).join('')}</select>
+      <select class="arOp">${ops.map(([v,l])=>`<option value="${v}"${rule.op===v?' selected':''}>${l}</option>`).join('')}</select>
+      ${noVal?'':`<input class="arVal" type="${rule.op==='before'||rule.op==='after'?'date':'text'}" value="${escH(rule.value||'')}" placeholder="value" style="min-width:150px">`}
+      <button class="btn arDel" title="Remove rule" style="padding:4px 9px">✕</button>
+    </div>`; };
+  const nActive = STATE.adFilters.filter(ruleActive).length;
+  d.insertAdjacentHTML('beforeend', `<div class="panel" id="adFilters">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">AD filters ${nActive?`<span class="pill ok" style="font-weight:600">${nActive} active</span>`:''}</h3>
+      <button id="adAddRule" class="btn" style="font-size:12px;padding:5px 11px">+ Add filter</button>
+    </div>
+    <p class="sub" style="margin:8px 0 2px">Scope the analysis by any AD attribute — field → operator → value, stacked with AND, each include or exclude. Filter on SPN, CN/Name, Description, Last Logon, Password Last Set, MemberOf, OS, and more.</p>
+    <div class="sub" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">Quick picks: ${QUICK.map((q,i)=>`<button class="btn adQuick" data-q="${i}" style="font-size:11px;padding:3px 9px">${escH(q[0])}</button>`).join('')||'<span class="sub">none available for this export</span>'}</div>
+    <div id="adRuleList">${STATE.adFilters.map(ruleRow).join('')}</div></div>`);
+  function adRerenderRules(){ render(); }
+  $('#adAddRule').addEventListener('click',()=>{ STATE.adFilters.push({mode:'exclude',field:'',op:'contains',value:''}); adRerenderRules(); });
+  $('#adFilters').querySelectorAll('.adQuick').forEach(b=>b.addEventListener('click',e=>{ const q=QUICK[+e.target.dataset.q];
+    STATE.adFilters.push({mode:q[2],field:q[1],op:q[3],value:q[4]}); adRerenderRules(); }));
+  $('#adRuleList').addEventListener('change',e=>{ const row=e.target.closest('.adrule'); if(!row) return; const rule=STATE.adFilters[+row.dataset.i]; if(!rule) return;
+    if(e.target.classList.contains('arMode')) rule.mode=e.target.value;
+    else if(e.target.classList.contains('arField')){ rule.field=e.target.value; const ops=AD_OPS[rule.field?adFieldType(rule.field):'text']; rule.op=ops[0][0]; }
+    else if(e.target.classList.contains('arOp')) rule.op=e.target.value;
+    else if(e.target.classList.contains('arVal')) rule.value=e.target.value;
+    render(); });
+  $('#adRuleList').addEventListener('click',e=>{ if(!e.target.classList.contains('arDel')) return; const row=e.target.closest('.adrule'); STATE.adFilters.splice(+row.dataset.i,1); render(); });
 
   // agent-health thresholds — per device type × per agent day targets, editable like the Tenable dashboard's SLAs
   const profRow = (prof, plabel) => `<div class="controls" style="margin-top:6px;align-items:center">
