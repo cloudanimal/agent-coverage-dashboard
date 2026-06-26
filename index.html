@@ -88,6 +88,14 @@
   .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-bottom:8px}
   .legend span{display:flex;align-items:center;gap:5px}
   .sw{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .msel{position:relative;display:inline-block}
+  .msel-pop{position:absolute;top:calc(100% + 4px);left:0;z-index:30;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px;min-width:240px;max-width:360px;box-shadow:0 8px 24px rgba(0,0,0,.35)}
+  .msel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;margin-bottom:6px}
+  .msel-head .modes label{margin-right:8px;cursor:pointer}
+  .msel-head a{cursor:pointer;color:var(--accent)}
+  .msel-list{max-height:240px;overflow:auto;display:flex;flex-direction:column;gap:1px}
+  .msel-list label{display:flex;align-items:center;gap:6px;font-size:12px;padding:3px 5px;border-radius:4px;cursor:pointer;white-space:nowrap}
+  .msel-list label:hover{background:var(--panel2)}
 </style>
 </head>
 <body>

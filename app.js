@@ -2,6 +2,7 @@
 // ---------- state ----------
 const STATE = { ad:[], me:[], ten:[], cs:[], adCols:[], src:{}, staleDays:30, denom:'enabled',
   excludeNonReal:true, logonFilter:true, logonDays:15, cbTheme:'default',
+  ouMode:'exclude', ouSel:new Set(),   // OU scope: include-only or exclude the selected OUs from the whole analysis
   // agent health = recency of each agent's scan (check-in for CrowdStrike, which has no scan),
   // per device type × per agent, configurable like the Tenable dashboard's SLA day targets.
   health:{ server:{me:2,ten:2,cs:2}, workstation:{me:14,ten:14,cs:7} } };
@@ -27,6 +28,7 @@ loadConfig();
 const $ = s => document.querySelector(s);
 const fmt = n => (n==null?'—':Number(n).toLocaleString());
 const pct = (a,b) => b? Math.round(a/b*100) : 0;
+const escH = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const showLoading = m => { $('#loadingMsg').textContent=m||'Working…'; $('#loading').style.display='flex'; };
 const hideLoading = () => { $('#loading').style.display='none'; };
 const nextPaint = () => new Promise(r=>setTimeout(r,30));
@@ -233,6 +235,9 @@ function render(){
     if(STATE.denom!=='all' && !c.enabled) return false;
     if(STATE.excludeNonReal && !c.isReal) return false;
     if(STATE.logonFilter && !(c.logonDays!=null && c.logonDays<=STATE.logonDays)) return false;
+    if(STATE.ouSel.size){ const inSet=STATE.ouSel.has(c.ou);
+      if(STATE.ouMode==='include' && !inSet) return false;
+      if(STATE.ouMode==='exclude' && inSet) return false; }
     return true;
   });
   const denom = inScope.length || 1;
@@ -262,18 +267,43 @@ function render(){
   d.insertAdjacentHTML('beforeend', `<div class="cards">${cards}</div>`);
 
   // scope + stale controls
+  const allOus=[...new Set(M.ad.map(c=>c.ou))].filter(Boolean).sort();
+  const ouSelN=STATE.ouSel.size;
+  const ouBtnLabel=ouSelN ? `OUs: ${STATE.ouMode==='include'?'include':'exclude'} ${ouSelN} ▾` : 'OUs: all ▾';
+  const ouChecks=allOus.map(o=>`<label><input type="checkbox" class="ouChk" value="${escH(o)}"${STATE.ouSel.has(o)?' checked':''}> ${escH(o)}</label>`).join('');
+  const ouNote = ouSelN ? `, OU filter: ${STATE.ouMode==='include'?'include only':'exclude'} ${ouSelN} OU${ouSelN>1?'s':''}` : '';
   d.insertAdjacentHTML('beforeend', `<div class="panel"><div class="controls">
     <label class="sub">Coverage denominator
       <select id="denomSel"><option value="enabled"${STATE.denom==='enabled'?' selected':''}>Enabled AD computers</option><option value="all"${STATE.denom==='all'?' selected':''}>All AD computers</option></select></label>
     <label class="sub" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="realChk"${STATE.excludeNonReal?' checked':''}> Real systems only <span class="sub" title="Excludes objects with no OperatingSystem or a cluster service principal name (cluster name objects, aliases)">(exclude cluster/alias)</span></label>
     <label class="sub" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="logonChk"${STATE.logonFilter?' checked':''}> Logged on within <input id="logonDays" type="number" min="1" value="${STATE.logonDays}" style="width:58px"> days</label>
     <label class="sub">Stale threshold <input id="staleInp" type="number" min="1" value="${STATE.staleDays}" style="width:64px"> days</label>
-  </div><div class="sub">Scope = ${fmt(denom)} of ${fmt(M.ad.length)} AD objects (excluded: ${STATE.excludeNonReal?fmt(nNonReal)+' cluster/alias':'none'}${STATE.logonFilter?', plus anything not logged on in '+STATE.logonDays+'d':''}). An agent is “stale” if its last <em>contact</em> is older than the stale threshold.</div></div>`);
+    <div class="msel" id="ouScope">
+      <button class="btn" type="button" id="ouScopeBtn">${ouBtnLabel}</button>
+      <div class="msel-pop" id="ouScopePop" hidden>
+        <div class="msel-head">
+          <span class="modes"><label><input type="radio" name="ouMode" value="include"${STATE.ouMode==='include'?' checked':''}> Include only</label><label><input type="radio" name="ouMode" value="exclude"${STATE.ouMode==='exclude'?' checked':''}> Exclude</label></span>
+          <span><a id="ouAll">All</a> · <a id="ouNone">None</a></span>
+        </div>
+        <div class="msel-list" id="ouList">${ouChecks||'<span class="sub">No OUs</span>'}</div>
+      </div>
+    </div>
+  </div><div class="sub">Scope = ${fmt(denom)} of ${fmt(M.ad.length)} AD objects (excluded: ${STATE.excludeNonReal?fmt(nNonReal)+' cluster/alias':'none'}${STATE.logonFilter?', plus anything not logged on in '+STATE.logonDays+'d':''}${ouNote}). An agent is “stale” if its last <em>contact</em> is older than the stale threshold.</div></div>`);
   $('#denomSel').addEventListener('change',e=>{ STATE.denom=e.target.value; render(); });
   $('#realChk').addEventListener('change',e=>{ STATE.excludeNonReal=e.target.checked; render(); });
   $('#logonChk').addEventListener('change',e=>{ STATE.logonFilter=e.target.checked; render(); });
   $('#logonDays').addEventListener('change',e=>{ STATE.logonDays=Math.max(1,parseInt(e.target.value)||15); render(); });
   $('#staleInp').addEventListener('change',e=>{ STATE.staleDays=Math.max(1,parseInt(e.target.value)||30); render(); });
+  // OU scope multi-select: toggle items freely, apply (re-render) once the popover closes
+  (function(){ const wrap=$('#ouScope'), btn=$('#ouScopeBtn'), pop=$('#ouScopePop'); let dirty=false;
+    function outside(e){ if(!wrap.contains(e.target)) close(); }
+    function close(){ if(pop.hidden) return; pop.hidden=true; document.removeEventListener('click',outside,true); if(dirty){ dirty=false; render(); } }
+    btn.addEventListener('click',e=>{ e.stopPropagation(); if(pop.hidden){ pop.hidden=false; setTimeout(()=>document.addEventListener('click',outside,true),0); } else close(); });
+    $('#ouList').addEventListener('change',e=>{ if(!e.target.classList.contains('ouChk'))return; const v=e.target.value; if(e.target.checked)STATE.ouSel.add(v); else STATE.ouSel.delete(v); dirty=true; });
+    pop.querySelectorAll('input[name=ouMode]').forEach(r=>r.addEventListener('change',e=>{ STATE.ouMode=e.target.value; dirty=true; }));
+    $('#ouAll').addEventListener('click',()=>{ allOus.forEach(o=>STATE.ouSel.add(o)); $('#ouList').querySelectorAll('.ouChk').forEach(c=>c.checked=true); dirty=true; });
+    $('#ouNone').addEventListener('click',()=>{ STATE.ouSel.clear(); $('#ouList').querySelectorAll('.ouChk').forEach(c=>c.checked=false); dirty=true; });
+  })();
 
   // agent-health thresholds — per device type × per agent day targets, editable like the Tenable dashboard's SLAs
   const profRow = (prof, plabel) => `<div class="controls" style="margin-top:6px;align-items:center">
