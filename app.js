@@ -102,15 +102,11 @@ function slotId(k){ return k==='ten'?'ten':k; }   // ids match
 // enable the Build button once AD + ≥1 agent are loaded — no auto-build, the user clicks Build
 function updateBuildBtn(){ const ready = STATE.ad.length && AKEYS.some(k=>(STATE[k]||[]).length);
   const b=document.getElementById('buildBtn'); if(b) b.disabled=!ready; }
-// collapse the uploader to a one-line summary after build; expand to edit
+// collapse the uploader to the source-filter bar after build; expand to edit. The per-source
+// counts live on the filter buttons (populated in render), so there's nothing to fill here.
 function toggleUploader(expand){
   document.getElementById('dropZone').style.display = expand ? '' : 'none';
   document.getElementById('srcBar').classList.toggle('hidden', !!expand);
-  if(!expand){
-    const parts=[['ad','Active Directory'],['me','ManageEngine'],['ten','Tenable'],['cs','CrowdStrike']]
-      .filter(([k])=>(STATE[k]||[]).length).map(([k,l])=>`${l} <span style="color:var(--ok)">✓</span> <span style="color:var(--muted)">${(STATE[k].length).toLocaleString()}</span>`);
-    document.getElementById('srcBarList').innerHTML = parts.join(' &nbsp;·&nbsp; ');
-  }
 }
 
 // ---------- AD JSON → flattened records ----------
@@ -462,10 +458,11 @@ function render(){
   wireMsel({id:'ou', sel:STATE.ouSel, setMode:v=>STATE.ouMode=v, valuesLen:allOus.length});
   wireMsel({id:'grp', sel:STATE.grpSel, setMode:v=>STATE.grpMode=v, valuesLen:allGroups.length});
 
-  // ---- per-source filter buttons, merged into the Sources bar (open slide-out drawers) ----
-  const fBtn=(src,label)=>{ const n=activeRuleCount(src); return `<button class="btn fbtn" data-src="${src}">${label}${n?`<span class="fbadge">${n}</span>`:''}</button>`; };
+  // ---- per-source filter buttons (show the source + loaded row count; open slide-out filter drawers) ----
+  const fBtn=(src)=>{ const n=activeRuleCount(src); const cnt = src==='ad' ? STATE.ad.length : (STATE[src]||[]).length;
+    return `<button class="btn fbtn" data-src="${src}" title="Filter ${escH(SRC_LABEL[src])}">${escH(SRC_LABEL[src])} <span style="color:var(--ok)">✓</span> ${fmt(cnt)}${n?`<span class="fbadge">${n}</span>`:''}</button>`; };
   const ft=$('#srcBarFilters');
-  if(ft){ ft.innerHTML = fBtn('ad','AD scope') + AGENTS.map(([k,label])=>fBtn(k,label)).join('');
+  if(ft){ ft.innerHTML = fBtn('ad') + AKEYS.map(k=>fBtn(k)).join('');
     ft.querySelectorAll('.fbtn').forEach(b=>b.addEventListener('click',()=>openDrawer(b.dataset.src))); }
   if(STATE._drawer) buildDrawer(STATE._drawer);   // keep an open drawer in sync after a re-render
 
