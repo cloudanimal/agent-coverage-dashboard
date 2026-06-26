@@ -95,16 +95,12 @@ const FLATBTN = { ad:'adFlatBtn', me:'meFlatBtn', ten:'tenFlatBtn', cs:'csFlatBt
 function markLoaded(kind, name){ const slot=document.getElementById('slot-'+slotId(kind)); slot.classList.add('loaded');
   markStatus(kind, '✓ '+name+' · '+(STATE[kind].length).toLocaleString()+' rows');
   const fb=document.getElementById(FLATBTN[kind]); if(fb) fb.classList.remove('hidden');
-  maybeAutoBuild(); }
+  updateBuildBtn(); }
 function markStatus(kind, msg){ document.getElementById('st-'+slotId(kind)).textContent=msg; }
 function slotId(k){ return k==='ten'?'ten':k; }   // ids match
-let _autoT=null;
-function maybeAutoBuild(){
-  if(STATE._loadingSample) return;                                   // loadSample renders once at the end
-  const hasAgent = AKEYS.some(k=>(STATE[k]||[]).length);
-  if(!STATE.ad.length || !hasAgent) return;                          // need AD + ≥1 agent
-  clearTimeout(_autoT); _autoT=setTimeout(()=>render(), 200);        // debounce multiple uploads
-}
+// enable the Build button once AD + ≥1 agent are loaded — no auto-build, the user clicks Build
+function updateBuildBtn(){ const ready = STATE.ad.length && AKEYS.some(k=>(STATE[k]||[]).length);
+  const b=document.getElementById('buildBtn'); if(b) b.disabled=!ready; }
 // collapse the uploader to a one-line summary after build; expand to edit
 function toggleUploader(expand){
   document.getElementById('dropZone').style.display = expand ? '' : 'none';
@@ -673,9 +669,10 @@ async function savePanel(el,name,fmt,btn){ const stamp=new Date().toISOString().
 }
 
 // ---------- sample data ----------
-$('#loadSample').addEventListener('click', loadSample);
-if(/[?&]autosample=1/.test(location.search)) window.addEventListener('load', loadSample);   // demo links / headless screenshots
-async function loadSample(){
+$('#loadSample').addEventListener('click', ()=>loadSample(false));   // load sources only — user clicks Build
+$('#buildBtn') && $('#buildBtn').addEventListener('click', ()=>{ if(STATE.ad.length) render(); });
+if(/[?&]autosample=1/.test(location.search)) window.addEventListener('load', ()=>loadSample(true));   // demo links / headless screenshots build automatically
+async function loadSample(build){
   if(location.protocol==='file:'){ $('#loadHint').innerHTML='⚠️ Sample auto-load needs the page served over http (browsers block local file reads). Run <code>python3 -m http.server</code> here, or load your own files.'; return; }
   try{
     STATE._loadingSample = true;
@@ -691,7 +688,8 @@ async function loadSample(){
     STATE.ten = Papa.parse(tenTxt,{header:true,skipEmptyLines:true}).data; STATE.src.ten='tenable-agents.csv'; markLoaded('ten','tenable-agents.csv (sample)');
     STATE.cs = Papa.parse(csTxt,{header:true,skipEmptyLines:true}).data; STATE.src.cs='crowdstrike.csv'; markLoaded('cs','crowdstrike.csv (sample)');
     STATE._loadingSample = false;
-    showLoading('Building dashboard…'); await nextPaint(); render();
+    if(build){ showLoading('Building dashboard…'); await nextPaint(); render(); }      // only auto-build for demo links
+    else { updateBuildBtn(); $('#loadHint').innerHTML='Sample sources loaded — click <b>Build dashboard</b>.'; }
   }catch(e){ console.error(e); alert('Could not load sample (serve over http, or load files manually).'); }
   finally{ STATE._loadingSample=false; hideLoading(); }
 }

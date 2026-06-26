@@ -168,8 +168,9 @@
         </div>
       </div>
       <div class="actions">
-        <button class="btn primary" id="loadSample">Load sample data</button>
-        <span class="sub" id="loadHint" style="align-self:center">The dashboard builds automatically once Active Directory and at least one agent are loaded.</span>
+        <button class="btn primary" id="buildBtn" disabled>Build dashboard</button>
+        <button class="btn" id="loadSample">Load sample data</button>
+        <span class="sub" id="loadHint" style="align-self:center">Load Active Directory and at least one agent, then click <b>Build dashboard</b>.</span>
       </div>
       <input type="file" id="file-ad" accept=".json,.csv" class="hidden">
       <input type="file" id="file-me" accept=".json,.csv" class="hidden">
