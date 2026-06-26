@@ -669,7 +669,7 @@ async function savePanel(el,name,fmt,btn){ const stamp=new Date().toISOString().
 }
 
 // ---------- sample data ----------
-$('#loadSample').addEventListener('click', ()=>loadSample(false));   // load sources only — user clicks Build
+$('#loadSample').addEventListener('click', ()=>loadSample(true));   // sample is a one-click demo: load + build
 $('#buildBtn') && $('#buildBtn').addEventListener('click', ()=>{ if(STATE.ad.length) render(); });
 if(/[?&]autosample=1/.test(location.search)) window.addEventListener('load', ()=>loadSample(true));   // demo links / headless screenshots build automatically
 async function loadSample(build){
