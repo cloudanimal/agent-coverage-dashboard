@@ -87,7 +87,7 @@ const csv = (rows, cols) => { const esc=v=>{v=v==null?'':String(v);return /[",\n
 const has = (c, base) => { let p=base; if(c.type==='Server') p+=0.05; if(!c.enabled) p-=0.45; return rnd()<p; };
 
 // ---- agent sources (subsets of REAL systems) + orphans ----
-const me=[], ten=[], cs=[], intune=[];
+const me=[], ten=[], cs=[];
 real.forEach(c=>{
   if(has(c,0.90)){ const stale=rnd()<0.07; me.push({ 'Computer Name':c.name,
     'Agent Version':`10.1.${2400+Math.floor(rnd()*40)}.${Math.floor(rnd()*20)}`,
@@ -98,13 +98,6 @@ real.forEach(c=>{
     AgentId:[...Array(32)].map(()=>'0123456789abcdef'[Math.floor(rnd()*16)]).join(''),
     Groups:`${c.seg}-Agents`, LastConnectUtc:iso(daysAgoMs(stale?30+rnd()*90:rnd()*2)),
     LastScannedUtc:iso(daysAgoMs(stale?40+rnd()*90:rnd()*9)), RestartPending: rnd()<0.05?'True':'False' }); }
-  // Intune — heavier on workstations, lighter on Linux servers
-  { let p=0.80; if(c.type==='Workstation') p+=0.12; if(/linux/i.test(c.os)) p-=0.5; if(!c.enabled) p-=0.45;
-    if(rnd()<p){ const noncompliant=rnd()<0.12; const stale=rnd()<0.06;
-      intune.push({ 'Device name':c.name, 'OS':c.os.includes('Linux')?'Linux':'Windows', 'OS version':/server 2022|24h2/i.test(c.os)?'10.0.22631':'10.0.19045',
-        'Compliance state':noncompliant?'Noncompliant':'Compliant', 'Last check-in':iso(daysAgoMs(stale?30+rnd()*90:rnd()*2)),
-        'Ownership':c.type==='Workstation'?(rnd()<0.2?'Personal':'Corporate'):'Corporate', 'Management name':`${c.name}_${c.os.includes('Linux')?'Linux':'Windows'}`,
-        'Primary user':`${c.seg.toLowerCase()}\\user${Math.floor(rnd()*900)}` }); } }
   if(has(c,0.83)){ const rfm=rnd()<0.04; cs.push({ Hostname:c.name,
     'Sensor Version':`7.${14+Math.floor(rnd()*6)}.${17000+Math.floor(rnd()*900)}`,
     'Last Seen':iso(daysAgoMs(rnd()<0.06?30+rnd()*60:rnd()*2)), 'First Seen':iso(daysAgoMs(60+rnd()*1000)),
@@ -115,12 +108,10 @@ real.forEach(c=>{
 for(let i=0;i<40;i++) me.push({ 'Computer Name':`OLD-PC${pad(i,3)}`,'Agent Version':'10.1.2390.4','Last Contact Time':iso(daysAgoMs(90+rnd()*200)),'Last Successful Scan Time':iso(daysAgoMs(95+rnd()*200)),'Last Patch Date':iso(daysAgoMs(120+rnd()*200)),'Custom Group':'Decommissioned' });
 for(let i=0;i<30;i++) ten.push({ Hostname:`LAB-TEST${pad(i,3)}`,AgentId:'ff00ff00ff00ff00ff00ff00ff00ff00',Groups:'Lab-Agents',LastConnectUtc:iso(daysAgoMs(rnd()*5)),LastScannedUtc:iso(daysAgoMs(rnd()*10)),RestartPending:'False' });
 for(let i=0;i<24;i++) cs.push({ Hostname:`BYOD-LT${pad(i,3)}`,'Sensor Version':'7.19.17888','Last Seen':iso(daysAgoMs(rnd()*3)),'First Seen':iso(daysAgoMs(30+rnd()*200)),'OS Version':'Windows 11 Pro',Platform:'Windows',Status:'Normal','OU':'Unmanaged','Device ID':'aa11bb22cc33dd44ee55ff66aa77bb88' });
-for(let i=0;i<18;i++) intune.push({ 'Device name':`INTUNE-MDM${pad(i,3)}`,'OS':'Windows','OS version':'10.0.22631','Compliance state':'Compliant','Last check-in':iso(daysAgoMs(rnd()*4)),'Ownership':'Personal','Management name':`mdm${i}`,'Primary user':'mobile\\user'+i });
 
 fs.writeFileSync(path.join(OUT,'manageengine.csv'), csv(me, ['Computer Name','Agent Version','Last Contact Time','Last Successful Scan Time','Last Patch Date','Custom Group']));
 fs.writeFileSync(path.join(OUT,'tenable-agents.csv'), csv(ten, ['Hostname','AgentId','Groups','LastConnectUtc','LastScannedUtc','RestartPending']));
 fs.writeFileSync(path.join(OUT,'crowdstrike.csv'), csv(cs, ['Hostname','Sensor Version','Last Seen','First Seen','OS Version','Platform','Status','OU','Device ID']));
-fs.writeFileSync(path.join(OUT,'intune.csv'), csv(intune, ['Device name','OS','OS version','Compliance state','Last check-in','Ownership','Management name','Primary user']));
 
 const within15 = real.filter(c=>c.enabled && (Date.now()-c.logon)/86400000<=15).length;
-console.log(`real=${real.length} clusters=${clusters.length} | enabled=${real.filter(c=>c.enabled).length} loggedIn<=15d=${within15} | ME=${me.length} Tenable=${ten.length} CS=${cs.length} Intune=${intune.length}`);
+console.log(`real=${real.length} clusters=${clusters.length} | enabled=${real.filter(c=>c.enabled).length} loggedIn<=15d=${within15} | ME=${me.length} Tenable=${ten.length} CS=${cs.length}`);

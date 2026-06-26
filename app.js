@@ -1,6 +1,6 @@
 'use strict';
 // ---------- state ----------
-const STATE = { ad:[], me:[], ten:[], cs:[], intune:[], adCols:[], src:{}, staleDays:30, denom:'enabled',
+const STATE = { ad:[], me:[], ten:[], cs:[], adCols:[], src:{}, staleDays:30, denom:'enabled',
   excludeNonReal:true, logonFilter:true, logonDays:15 };
 const $ = s => document.querySelector(s);
 const fmt = n => (n==null?'—':Number(n).toLocaleString());
@@ -16,7 +16,7 @@ $('#themeBtn').addEventListener('click', ()=>{ const d=document.documentElement.
 
 // ---------- file pickers ----------
 function pick(k){ $('#file-'+k).click(); }
-['ad','me','ten','cs','intune'].forEach(k=>{
+['ad','me','ten','cs'].forEach(k=>{
   $('#file-'+k).addEventListener('change', e=>{ const f=e.target.files[0]; if(f) handleFile(k,f); });
 });
 async function handleFile(kind, file){
@@ -32,7 +32,7 @@ async function handleFile(kind, file){
   }catch(err){ console.error(err); markStatus(kind, '⚠️ '+(err.message||err)); }
   finally{ hideLoading(); }
 }
-const FLATBTN = { ad:'adFlatBtn', me:'meFlatBtn', ten:'tenFlatBtn', cs:'csFlatBtn', intune:'intuneFlatBtn' };
+const FLATBTN = { ad:'adFlatBtn', me:'meFlatBtn', ten:'tenFlatBtn', cs:'csFlatBtn' };
 function markLoaded(kind, name){ const slot=document.getElementById('slot-'+slotId(kind)); slot.classList.add('loaded');
   markStatus(kind, '✓ '+name+' · '+(STATE[kind].length).toLocaleString()+' rows');
   const fb=document.getElementById(FLATBTN[kind]); if(fb) fb.classList.remove('hidden');
@@ -51,7 +51,7 @@ function toggleUploader(expand){
   document.getElementById('dropZone').style.display = expand ? '' : 'none';
   document.getElementById('srcBar').classList.toggle('hidden', !!expand);
   if(!expand){
-    const parts=[['ad','Active Directory'],['me','ManageEngine'],['ten','Tenable'],['cs','CrowdStrike'],['intune','Intune']]
+    const parts=[['ad','Active Directory'],['me','ManageEngine'],['ten','Tenable'],['cs','CrowdStrike']]
       .filter(([k])=>(STATE[k]||[]).length).map(([k,l])=>`${l} <span style="color:var(--ok)">✓</span> <span style="color:var(--muted)">${(STATE[k].length).toLocaleString()}</span>`);
     document.getElementById('srcBarList').innerHTML = parts.join(' &nbsp;·&nbsp; ');
   }
@@ -97,9 +97,6 @@ function colsFor(kind){
   if(kind==='cs') return { name:findCol(c,[/host.?name/i,/^host$/i,/^name$/i,/computer/i]),
     seen:findCol(c,[/last.?seen/i,/last.?contact/i]), ver:findCol(c,[/sensor.?version/i,/agent.?version/i,/version/i]),
     status:findCol(c,[/status/i,/rfm/i,/reduced/i]), group:findCol(c,[/^ou$/i,/group/i]) };
-  if(kind==='intune') return { name:findCol(c,[/device.?name/i,/computer.?name/i,/host.?name/i,/^name$/i]),
-    seen:findCol(c,[/last.?check.?in/i,/last.?sync/i,/last.?contact/i,/last.?seen/i]), ver:findCol(c,[/os.?version/i,/version/i]),
-    status:findCol(c,[/compliance/i,/status/i]), group:findCol(c,[/ownership/i,/group/i]) };
 }
 
 // ---------- build the coverage model ----------
@@ -154,7 +151,8 @@ function buildModel(){
   return { ad, sources, matched, orphans, adNameCol };
 }
 
-const AGENTS = [ ['me','ManageEngine','#b9770b'], ['ten','Tenable','#003f73'], ['cs','CrowdStrike','#1f9d57'], ['intune','Intune','#534ab7'] ];
+// Intune temporarily removed — needs a different inventory-model approach (AD ∪ Intune), to be reintroduced.
+const AGENTS = [ ['me','ManageEngine','#b9770b'], ['ten','Tenable','#003f73'], ['cs','CrowdStrike','#1f9d57'] ];
 const AKEYS = AGENTS.map(a=>a[0]);
 const AGENT_NAME = Object.fromEntries(AGENTS.map(a=>[a[0],a[1]]));
 
@@ -442,17 +440,15 @@ async function loadSample(){
   try{
     STATE._loadingSample = true;
     showLoading('Loading sample data…'); await nextPaint();
-    const [adTxt, meTxt, tenTxt, csTxt, intuneTxt] = await Promise.all([
+    const [adTxt, meTxt, tenTxt, csTxt] = await Promise.all([
       fetch('sample-data/ad-computers.json').then(r=>r.text()),
       fetch('sample-data/manageengine.csv').then(r=>r.text()),
       fetch('sample-data/tenable-agents.csv').then(r=>r.text()),
-      fetch('sample-data/crowdstrike.csv').then(r=>r.text()),
-      fetch('sample-data/intune.csv').then(r=>r.text()) ]);
+      fetch('sample-data/crowdstrike.csv').then(r=>r.text()) ]);
     STATE.ad = flattenAd(adTxt); STATE.adCols = unionCols(STATE.ad); STATE.src.ad='ad-computers.json'; markLoaded('ad','ad-computers.json (sample)');
     STATE.me = Papa.parse(meTxt,{header:true,skipEmptyLines:true}).data; STATE.src.me='manageengine.csv'; markLoaded('me','manageengine.csv (sample)');
     STATE.ten = Papa.parse(tenTxt,{header:true,skipEmptyLines:true}).data; STATE.src.ten='tenable-agents.csv'; markLoaded('ten','tenable-agents.csv (sample)');
     STATE.cs = Papa.parse(csTxt,{header:true,skipEmptyLines:true}).data; STATE.src.cs='crowdstrike.csv'; markLoaded('cs','crowdstrike.csv (sample)');
-    STATE.intune = Papa.parse(intuneTxt,{header:true,skipEmptyLines:true}).data; STATE.src.intune='intune.csv'; markLoaded('intune','intune.csv (sample)');
     STATE._loadingSample = false;
     showLoading('Building dashboard…'); await nextPaint(); render();
   }catch(e){ console.error(e); alert('Could not load sample (serve over http, or load files manually).'); }

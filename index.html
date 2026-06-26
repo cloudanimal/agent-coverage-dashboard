@@ -90,7 +90,7 @@
 <header>
   <div>
     <h1>Agent Coverage Dashboard</h1>
-    <div class="sub">Reconcile Active Directory against your ManageEngine, Tenable, CrowdStrike &amp; Intune agents</div>
+    <div class="sub">Reconcile Active Directory against your ManageEngine, Tenable &amp; CrowdStrike agents</div>
   </div>
   <span class="priv">🔒 100% local — your data never leaves this browser</span>
   <div class="spacer"></div>
@@ -137,13 +137,6 @@
           <div class="actions"><button class="btn hidden" id="csFlatBtn" onclick="downloadFlat('cs')">Download flattened CSV</button></div>
           <div class="status" id="st-cs">Not loaded</div>
         </div>
-        <div class="slot" id="slot-intune">
-          <div class="t"><span>⑤ Intune</span></div>
-          <div class="d">Intune / Endpoint Manager device export (CSV or JSON): Device name, Compliance state, Last check-in, …</div>
-          <button class="btn" onclick="pick('intune')">Choose JSON / CSV</button>
-          <div class="actions"><button class="btn hidden" id="intuneFlatBtn" onclick="downloadFlat('intune')">Download flattened CSV</button></div>
-          <div class="status" id="st-intune">Not loaded</div>
-        </div>
       </div>
       <div class="actions">
         <button class="btn primary" id="loadSample">Load sample data</button>
@@ -153,7 +146,6 @@
       <input type="file" id="file-me" accept=".json,.csv" class="hidden">
       <input type="file" id="file-ten" accept=".json,.csv" class="hidden">
       <input type="file" id="file-cs" accept=".json,.csv" class="hidden">
-      <input type="file" id="file-intune" accept=".json,.csv" class="hidden">
     </div>
   </section>
   <section id="dashboard"></section>
