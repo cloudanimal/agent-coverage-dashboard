@@ -124,7 +124,8 @@ function meRow(c, { stale, contactMs, installMs }){
     Last_Contact_Time: meDate(contactMs), Last_Bootup_Time: meDate(daysAgoMs(rnd()*25)),
     Agent_Installed_on: meDate(installMs!=null?installMs:daysAgoMs(60+rnd()*340)), Agent_Upgraded_on: meDate(daysAgoMs(rnd()*60)),
     Agent_Executed_on: meDate(daysAgoMs(rnd()*3)), 'Last Patched Time': meDate(daysAgoMs(rnd()*45)),
-    'Last Successful Scan': meDate(daysAgoMs(stale?35+rnd()*120:rnd()*7)),
+    // most agents scan within ~1.5d; ~15% lag into a 3–40d tail → "not scanning" minority (esp. vs the 2d server threshold)
+    'Last Successful Scan': meDate(daysAgoMs(stale ? 35+rnd()*120 : (rnd()<0.15 ? 3+rnd()*37 : rnd()*1.5))),
     IP_Address: c.ip || `10.${1+Math.floor(rnd()*20)}.${Math.floor(rnd()*255)}.${1+Math.floor(rnd()*254)}`, Mac_Address: macAddr(),
     OS_Name: om.name, OS_Version: om.ver, Service_Pack: om.sp, 'OS Platform Name': om.plat,
     Agent_installed_dir: om.plat==='Linux' ? '/opt/manageengine/uems_agent/' : 'C:\\Program Files (x86)\\ManageEngine\\UEMS_Agent\\',
@@ -149,7 +150,7 @@ real.forEach(c=>{
   if(has(c,0.86)){ const stale=rnd()<0.06; ten.push({ Hostname: rnd()<0.3?c.dns:c.name,
     AgentId:[...Array(32)].map(()=>'0123456789abcdef'[Math.floor(rnd()*16)]).join(''),
     Groups:`${c.seg}-Agents`, LastConnectUtc:iso(daysAgoMs(stale?30+rnd()*90:rnd()*2)),
-    LastScannedUtc:iso(daysAgoMs(stale?40+rnd()*90:rnd()*9)), RestartPending: rnd()<0.05?'True':'False' }); }
+    LastScannedUtc:iso(daysAgoMs(stale?40+rnd()*90:(rnd()<0.15?3+rnd()*37:rnd()*1.5))), RestartPending: rnd()<0.05?'True':'False' }); }
   if(has(c,0.83)){ const rfm=rnd()<0.04; cs.push({ Hostname:c.name,
     'Sensor Version':`7.${14+Math.floor(rnd()*6)}.${17000+Math.floor(rnd()*900)}`,
     'Last Seen':iso(daysAgoMs(rnd()<0.06?30+rnd()*60:rnd()*2)), 'First Seen':iso(daysAgoMs(60+rnd()*1000)),

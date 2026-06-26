@@ -1,7 +1,9 @@
 'use strict';
 // ---------- state ----------
 const STATE = { ad:[], me:[], ten:[], cs:[], adCols:[], src:{}, staleDays:30, denom:'enabled',
-  excludeNonReal:true, logonFilter:true, logonDays:15 };
+  excludeNonReal:true, logonFilter:true, logonDays:15,
+  // agent health = recency of the last *successful scan* (distinct from last contact). Servers scan daily → tighter.
+  scanHealthSrv:2, scanHealthWks:14 };
 const $ = s => document.querySelector(s);
 const fmt = n => (n==null?'—':Number(n).toLocaleString());
 const pct = (a,b) => b? Math.round(a/b*100) : 0;
@@ -128,10 +130,14 @@ function buildModel(){
       : 'Other';
     const enabledRaw = adField(r,[adEnCol]); const enabled = /true|1|yes/i.test(String(enabledRaw)) || enabledRaw===true;
     const os = adField(r,[adOsCol]) || '—';
+    const scanThr = type==='Windows Workstation' ? STATE.scanHealthWks : STATE.scanHealthSrv;  // servers/RHEL = tight, wks = loose
     const cov = {};
     AKEYS.forEach(k=>{ const rec=idx[k].get(key); if(rec){ matched[k].add(key);
       const s=sources[k].seen; const days = s? daysSince(rec[s]) : null;
-      cov[k]={present:true, rec, days, stale: days!=null && days>STALE}; }
+      const sc=sources[k].scan; const canScan=!!sc; const scanDays = sc? daysSince(rec[sc]) : null;
+      // health: a present agent that hasn't completed a successful scan within the (type-aware) threshold
+      const notScanning = canScan && (scanDays==null || scanDays>scanThr);
+      cov[k]={present:true, rec, days, stale: days!=null && days>STALE, canScan, scanDays, notScanning}; }
       else cov[k]={present:false}; });
     const nAgents = AKEYS.filter(k=>cov[k].present).length;
     const spn = adField(r,[adSpnCol]);
@@ -176,6 +182,8 @@ function render(){
   const none  = inScope.filter(c=>c.nAgents===0).length;
   const noEdr = inScope.filter(c=>!c.cov.cs.present).length;
   const single= inScope.filter(c=>c.nAgents===1).length;
+  // scan-health: scanner agents that are contacting fine but haven't completed a successful scan within threshold
+  const notScanning = inScope.reduce((n,c)=>n+AKEYS.filter(k=>c.cov[k].present && !c.cov[k].stale && c.cov[k].notScanning).length,0);
 
   const d = $('#dashboard'); d.innerHTML='';
   if(!STATE.built) window.scrollTo({top:0});   // only jump to top on the first build, not on filter re-renders
@@ -188,6 +196,7 @@ function render(){
   cards += kpi('No coverage', fmt(none), 'in-scope, 0 agents', none? 'var(--crit)':null);
   cards += kpi('No EDR (CrowdStrike)', fmt(noEdr), pct(noEdr,denom)+'% of in-scope', noEdr? 'var(--crit)':null);
   cards += kpi('Single-agent hosts', fmt(single), `only 1 of ${AKEYS.length} agents`, single? 'var(--warn)':null);
+  cards += kpi('Not scanning', fmt(notScanning), `present but no scan in ${STATE.scanHealthSrv}d srv / ${STATE.scanHealthWks}d wks`, notScanning? '#8b5cf6':null);
   cards += kpi('Orphan agents', fmt(M.orphans.length), 'agents with no AD match', M.orphans.length?'var(--warn)':null);
   d.insertAdjacentHTML('beforeend', `<div class="cards">${cards}</div>`);
 
@@ -198,12 +207,15 @@ function render(){
     <label class="sub" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="realChk"${STATE.excludeNonReal?' checked':''}> Real systems only <span class="sub" title="Excludes objects with no OperatingSystem or a cluster service principal name (cluster name objects, aliases)">(exclude cluster/alias)</span></label>
     <label class="sub" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="logonChk"${STATE.logonFilter?' checked':''}> Logged on within <input id="logonDays" type="number" min="1" value="${STATE.logonDays}" style="width:58px"> days</label>
     <label class="sub">Stale threshold <input id="staleInp" type="number" min="1" value="${STATE.staleDays}" style="width:64px"> days</label>
-  </div><div class="sub">Scope = ${fmt(denom)} of ${fmt(M.ad.length)} AD objects (excluded: ${STATE.excludeNonReal?fmt(nNonReal)+' cluster/alias':'none'}${STATE.logonFilter?', plus anything not logged on in '+STATE.logonDays+'d':''}). An agent is “stale” if its last check-in is older than the stale threshold.</div></div>`);
+    <label class="sub" title="Agent health = recency of the last successful scan. Servers scan daily so use a tight window; workstations roam.">Scan health: server <input id="scanSrvInp" type="number" min="1" value="${STATE.scanHealthSrv}" style="width:50px"> / wks <input id="scanWksInp" type="number" min="1" value="${STATE.scanHealthWks}" style="width:50px"> days</label>
+  </div><div class="sub">Scope = ${fmt(denom)} of ${fmt(M.ad.length)} AD objects (excluded: ${STATE.excludeNonReal?fmt(nNonReal)+' cluster/alias':'none'}${STATE.logonFilter?', plus anything not logged on in '+STATE.logonDays+'d':''}). An agent is “stale” if its last <em>contact</em> is older than the stale threshold; “no scan” if it is contacting but its last <em>successful scan</em> is older than the scan-health threshold (CrowdStrike has no scan, so it is exempt).</div></div>`);
   $('#denomSel').addEventListener('change',e=>{ STATE.denom=e.target.value; render(); });
   $('#realChk').addEventListener('change',e=>{ STATE.excludeNonReal=e.target.checked; render(); });
   $('#logonChk').addEventListener('change',e=>{ STATE.logonFilter=e.target.checked; render(); });
   $('#logonDays').addEventListener('change',e=>{ STATE.logonDays=Math.max(1,parseInt(e.target.value)||15); render(); });
   $('#staleInp').addEventListener('change',e=>{ STATE.staleDays=Math.max(1,parseInt(e.target.value)||30); render(); });
+  $('#scanSrvInp').addEventListener('change',e=>{ STATE.scanHealthSrv=Math.max(1,parseInt(e.target.value)||2); render(); });
+  $('#scanWksInp').addEventListener('change',e=>{ STATE.scanHealthWks=Math.max(1,parseInt(e.target.value)||14); render(); });
 
   // charts
   d.insertAdjacentHTML('beforeend', `<div class="grid2">
@@ -274,7 +286,12 @@ function drawDepthChart(inScope){
 }
 
 // ---------- coverage matrix ----------
-const cell = c => c.present ? (c.stale? `<span class="pill stale" title="${Math.round(c.days)}d ago">stale</span>` : `<span class="pill ok">✓</span>`) : `<span class="pill gap">✗</span>`;
+const cell = c => {
+  if(!c.present) return `<span class="pill gap">✗</span>`;
+  if(c.stale) return `<span class="pill stale" title="last contact ${Math.round(c.days)}d ago">stale</span>`;
+  if(c.notScanning) return `<span class="pill noscan" title="${c.scanDays==null?'no successful scan on record':'last successful scan '+Math.round(c.scanDays)+'d ago'}">no scan</span>`;
+  return `<span class="pill ok">✓</span>`;
+};
 function buildMatrix(M, inScope){
   const segs=[...new Set(M.ad.map(c=>c.seg))].sort();
   const oses=[...new Set(M.ad.map(c=>c.os))].sort();
@@ -283,13 +300,13 @@ function buildMatrix(M, inScope){
   const html = `<div class="panel" id="matrixPanel"><h3>Coverage matrix</h3>
     <div class="controls">
       <input id="mxSearch" placeholder="Search host…" style="min-width:160px">
-      <select id="mxView"><option value="all">All in-scope</option><option value="gaps">Has a gap</option><option value="none">No coverage</option><option value="full">Fully covered</option><option value="stale">Any stale</option></select>
+      <select id="mxView"><option value="all">All in-scope</option><option value="gaps">Has a gap</option><option value="none">No coverage</option><option value="full">Fully covered</option><option value="stale">Any stale</option><option value="noscan">Not scanning</option></select>
       <select id="mxSeg"><option value="">All segments</option>${segs.map(s=>`<option>${s}</option>`).join('')}</select>
       <select id="mxOs"><option value="">All OS</option>${oses.map(s=>`<option>${s}</option>`).join('')}</select>
       <select id="mxType"><option value="">All types</option>${types.map(t=>`<option>${t}</option>`).join('')}</select>
       <span class="sub" id="mxCount"></span>
     </div>
-    <div class="legend"><span><span class="sw" style="background:#1f9d57"></span>Covered</span><span><span class="sw" style="background:#b9770b"></span>Stale (&gt;${STATE.staleDays}d)</span><span><span class="sw" style="background:#7a3340"></span>Gap</span></div>
+    <div class="legend"><span><span class="sw" style="background:#1f9d57"></span>Covered</span><span><span class="sw" style="background:#b9770b"></span>Stale contact (&gt;${STATE.staleDays}d)</span><span><span class="sw" style="background:#8b5cf6"></span>No scan (&gt;${STATE.scanHealthSrv}d srv/${STATE.scanHealthWks}d wks)</span><span><span class="sw" style="background:#7a3340"></span>Gap</span></div>
     <div class="scrollwrap"><table><thead><tr>
       <th data-s="name">Computer</th><th data-s="seg">Segment</th><th data-s="os">OS</th><th data-s="type">Type</th><th data-s="enabled">Enabled</th>
       ${AGENTS.map(a=>`<th data-s="cov:${a[0]}">${a[1]}</th>`).join('')}<th class="num" data-s="nAgents">Agents</th>
@@ -304,10 +321,11 @@ function buildMatrix(M, inScope){
       if(view==='none' && c.nAgents!==0) return false;
       if(view==='full' && c.nAgents!==AKEYS.length) return false;
       if(view==='stale' && !AKEYS.some(k=>c.cov[k].stale)) return false;
+      if(view==='noscan' && !AKEYS.some(k=>c.cov[k].present && !c.cov[k].stale && c.cov[k].notScanning)) return false;
       return true;
     });
     if(STATE._sort){ const {k,dir}=STATE._sort;
-      const keyVal=c=>{ if(k.startsWith('cov:')){ const co=c.cov[k.slice(4)]; return co.present?(co.stale?1:2):0; } return c[k]; };
+      const keyVal=c=>{ if(k.startsWith('cov:')){ const co=c.cov[k.slice(4)]; return co.present?(co.stale?1:co.notScanning?2:3):0; } return c[k]; };
       rows.sort((a,b)=>{ let x=keyVal(a),y=keyVal(b); if(typeof x==='string'){x=x.toUpperCase();y=String(y).toUpperCase();} return (x>y?1:x<y?-1:0)*dir; }); }
     $('#mxCount').textContent = rows.length.toLocaleString()+' of '+inScope.length.toLocaleString();
     $('#mxBody').innerHTML = rows.slice(0,2000).map(c=>`<tr>
@@ -440,11 +458,12 @@ async function loadSample(){
   try{
     STATE._loadingSample = true;
     showLoading('Loading sample data…'); await nextPaint();
+    const noStore = { cache:'no-store' };   // always pull the current sample, never a stale cached copy
     const [adTxt, meTxt, tenTxt, csTxt] = await Promise.all([
-      fetch('sample-data/ad-computers.json').then(r=>r.text()),
-      fetch('sample-data/manageengine.csv').then(r=>r.text()),
-      fetch('sample-data/tenable-agents.csv').then(r=>r.text()),
-      fetch('sample-data/crowdstrike.csv').then(r=>r.text()) ]);
+      fetch('sample-data/ad-computers.json', noStore).then(r=>r.text()),
+      fetch('sample-data/manageengine.csv', noStore).then(r=>r.text()),
+      fetch('sample-data/tenable-agents.csv', noStore).then(r=>r.text()),
+      fetch('sample-data/crowdstrike.csv', noStore).then(r=>r.text()) ]);
     STATE.ad = flattenAd(adTxt); STATE.adCols = unionCols(STATE.ad); STATE.src.ad='ad-computers.json'; markLoaded('ad','ad-computers.json (sample)');
     STATE.me = Papa.parse(meTxt,{header:true,skipEmptyLines:true}).data; STATE.src.me='manageengine.csv'; markLoaded('me','manageengine.csv (sample)');
     STATE.ten = Papa.parse(tenTxt,{header:true,skipEmptyLines:true}).data; STATE.src.ten='tenable-agents.csv'; markLoaded('ten','tenable-agents.csv (sample)');
