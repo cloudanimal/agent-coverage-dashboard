@@ -361,8 +361,10 @@ function render(){
   const none  = inScope.filter(c=>c.nAgents===0).length;
   const noEdr = inScope.filter(c=>!c.cov.cs.present).length;
   const single= inScope.filter(c=>c.nAgents===1).length;
-  // agent health: present & contacting fine, but the agent's scan (or check-in for CrowdStrike) is older than its threshold
-  const unhealthy = inScope.reduce((n,c)=>n+AKEYS.filter(k=>c.cov[k].present && !c.cov[k].stale && c.cov[k].unhealthy).length,0);
+  // flagged-agent counts derived from the single agentState (so they match the charts/matrix exactly)
+  const unhealthy = inScope.reduce((n,c)=>n+AKEYS.filter(k=>agentState(c,k)==='unhealthy').length,0);
+  const invalidN  = inScope.reduce((n,c)=>n+AKEYS.filter(k=>agentState(c,k)==='invalid').length,0);
+  const anyAgentRules = AKEYS.some(k=>activeRuleCount(k));
 
   const d = $('#dashboard'); d.innerHTML='';
   if(!STATE.built) window.scrollTo({top:0});   // only jump to top on the first build, not on filter re-renders
@@ -370,12 +372,14 @@ function render(){
   // KPI cards
   const kpi = (l,v,s,col)=>`<div class="card"><div class="l">${l}</div><div class="v"${col?` style="color:${col}"`:''}>${v}</div>${s?`<div class="s">${s}</div>`:''}</div>`;
   let cards = kpi('AD computers', fmt(M.ad.length), `${fmt(denom)} in scope · ${fmt(nNonReal)} cluster/alias`);
-  AGENTS.forEach(([k,label,c])=>{ const n=cov(k); cards += kpi(label+' coverage', pct(n,denom)+'%', `${fmt(n)} / ${fmt(denom)} · ${fmt(stale(k))} stale`, `var(${c})`); });
+  AGENTS.forEach(([k,label,c])=>{ const n=cov(k); const inv=inScope.filter(x=>agentState(x,k)==='invalid').length;
+    cards += kpi(label+' coverage', pct(n,denom)+'%', `${fmt(n)} / ${fmt(denom)} · ${fmt(stale(k))} stale${inv?` · ${fmt(inv)} invalid`:''}`, `var(${c})`); });
   cards += kpi('Fully covered', pct(fully,denom)+'%', `${fmt(fully)} on all ${AKEYS.length} agents`, 'var(--ok)');
   cards += kpi('No coverage', fmt(none), 'in-scope, 0 agents', none? 'var(--crit)':null);
   cards += kpi('No EDR (CrowdStrike)', fmt(noEdr), pct(noEdr,denom)+'% of in-scope', noEdr? 'var(--crit)':null);
   cards += kpi('Single-agent hosts', fmt(single), `only 1 of ${AKEYS.length} agents`, single? 'var(--warn)':null);
   cards += kpi('Unhealthy agents', fmt(unhealthy), `present but scan / check-in past threshold`, unhealthy? 'var(--noscan)':null);
+  if(anyAgentRules) cards += kpi('Invalid agents', fmt(invalidN), `present but failing a source validity rule`, invalidN? 'var(--high)':null);
   cards += kpi('Orphan agents', fmt(M.orphans.length), 'agents with no AD match', M.orphans.length?'var(--warn)':null);
   d.insertAdjacentHTML('beforeend', `<div class="cards">${cards}</div>`);
 
@@ -431,11 +435,11 @@ function render(){
 
   // charts
   d.insertAdjacentHTML('beforeend', `<div class="grid2">
-    <div class="panel"><h3>Coverage by agent</h3><div class="chartbox"><canvas id="cAgent"></canvas></div></div>
-    <div class="panel"><h3>Coverage by segment</h3><div class="chartbox"><canvas id="cSeg"></canvas></div></div>
+    <div class="panel"><h3>Coverage by agent <span class="sub">— healthy / unhealthy / invalid / stale / gap</span></h3><div class="chartbox"><canvas id="cAgent"></canvas></div></div>
+    <div class="panel"><h3>Healthy coverage by segment <span class="sub">— % covered by a valid, healthy agent</span></h3><div class="chartbox"><canvas id="cSeg"></canvas></div></div>
   </div>
   <div class="grid2">
-    <div class="panel"><h3>Coverage by OS / type</h3><div class="chartbox"><canvas id="cType"></canvas></div></div>
+    <div class="panel"><h3>Healthy coverage by OS / type</h3><div class="chartbox"><canvas id="cType"></canvas></div></div>
     <div class="panel"><h3>Coverage depth <span class="sub">— how many agents each host has</span></h3><div class="chartbox"><canvas id="cDepth"></canvas></div></div>
   </div>`);
   drawAgentChart(inScope, denom);
@@ -457,16 +461,15 @@ function render(){
 
 function chartGrid(){ return getComputedStyle(document.documentElement).getPropertyValue('--line').trim()||'#2a2f3e'; }
 function chartTick(){ return getComputedStyle(document.documentElement).getPropertyValue('--muted').trim()||'#9aa3b2'; }
+// single per-(host,agent) status, same priority as the matrix cell — every visual derives from this
+function agentState(c,k){ const co=c.cov[k]; if(!co.present) return 'gap'; if(co.stale) return 'stale'; if(co.invalid) return 'invalid'; if(co.unhealthy) return 'unhealthy'; return 'healthy'; }
+const isHealthy = (c,k)=>agentState(c,k)==='healthy';
 
 function drawAgentChart(inScope, denom){
-  const covered = AGENTS.map(([k])=>inScope.filter(c=>c.cov[k].present && !c.cov[k].stale).length);
-  const staleA  = AGENTS.map(([k])=>inScope.filter(c=>c.cov[k].present && c.cov[k].stale).length);
-  const gap     = AGENTS.map(([k])=>inScope.filter(c=>!c.cov[k].present).length);
+  const STATES=[['healthy','Healthy','--ok'],['unhealthy','Unhealthy','--noscan'],['invalid','Invalid','--high'],['stale','Stale','--warn'],['gap','Gap','--crit']];
   CHARTS.push(new Chart($('#cAgent'),{type:'bar',
-    data:{labels:AGENTS.map(a=>a[1]),datasets:[
-      {label:'Covered',data:covered,backgroundColor:cssvar('--ok')},
-      {label:'Stale',data:staleA,backgroundColor:cssvar('--warn')},
-      {label:'Gap',data:gap,backgroundColor:cssvar('--crit')} ]},
+    data:{labels:AGENTS.map(a=>a[1]),datasets:STATES.map(([s,label,cv])=>({label,backgroundColor:cssvar(cv),
+      data:AGENTS.map(([k])=>inScope.filter(c=>agentState(c,k)===s).length) }))},
     options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:chartTick()}}},
       scales:{x:{stacked:true,grid:{display:false},ticks:{color:chartTick()}},y:{stacked:true,grid:{color:chartGrid()},ticks:{color:chartTick()}}}}}));
 }
@@ -474,8 +477,8 @@ function drawSegChart(inScope){
   const segs=[...new Set(inScope.map(c=>c.seg))].sort();
   CHARTS.push(new Chart($('#cSeg'),{type:'bar',
     data:{labels:segs,datasets:AGENTS.map(([k,label,col])=>({label,backgroundColor:cssvar(col),
-      data:segs.map(s=>{ const rows=inScope.filter(c=>c.seg===s); return pct(rows.filter(c=>c.cov[k].present).length, rows.length); }) }))},
-    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:chartTick()}},tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.parsed.y+'%'}}},
+      data:segs.map(s=>{ const rows=inScope.filter(c=>c.seg===s); return pct(rows.filter(c=>isHealthy(c,k)).length, rows.length); }) }))},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:chartTick()}},tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.parsed.y+'% healthy'}}},
       scales:{x:{grid:{display:false},ticks:{color:chartTick()}},y:{max:100,grid:{color:chartGrid()},ticks:{color:chartTick(),callback:v=>v+'%'}}}}}));
 }
 function drawTypeChart(inScope){
@@ -483,8 +486,8 @@ function drawTypeChart(inScope){
   const types=order.filter(t=>inScope.some(c=>c.type===t));
   CHARTS.push(new Chart($('#cType'),{type:'bar',
     data:{labels:types,datasets:AGENTS.map(([k,label,col])=>({label,backgroundColor:cssvar(col),
-      data:types.map(t=>{ const rows=inScope.filter(c=>c.type===t); return pct(rows.filter(c=>c.cov[k].present).length, rows.length); }) }))},
-    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:chartTick()}},tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.parsed.y+'%'}}},
+      data:types.map(t=>{ const rows=inScope.filter(c=>c.type===t); return pct(rows.filter(c=>isHealthy(c,k)).length, rows.length); }) }))},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:chartTick()}},tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.parsed.y+'% healthy'}}},
       scales:{x:{grid:{display:false},ticks:{color:chartTick()}},y:{max:100,grid:{color:chartGrid()},ticks:{color:chartTick(),callback:v=>v+'%'}}}}}));
 }
 function drawDepthChart(inScope){
