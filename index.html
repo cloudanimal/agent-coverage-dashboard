@@ -131,11 +131,12 @@
 </header>
 <main>
   <section id="uploader">
-    <div id="srcBar" class="hidden" style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 13px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px">
-      <button class="btn" onclick="toggleSources()" style="font-weight:600" title="Edit sources (click again to close)">Edit Sources</button>
-      <span id="srcBarFilters" style="display:contents" title="Click a source to scope / set validity rules &amp; health thresholds"></span>
-      <span style="width:1px;height:22px;background:var(--line)"></span>
-      <span id="srcBarControls" style="display:contents"></span>
+    <div id="srcBar" class="hidden" style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <button class="btn" onclick="toggleSources()" style="font-weight:600" title="Edit sources (click again to close)">Edit Sources</button>
+        <span id="srcBarFilters" class="ftoolbar" title="Click a source to scope / set validity rules &amp; health thresholds"></span>
+      </div>
+      <div id="srcBarControls"></div>
     </div>
     <div class="drop" id="dropZone">
       <h2>Load your sources</h2>

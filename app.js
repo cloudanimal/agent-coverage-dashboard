@@ -443,17 +443,15 @@ function render(){
   const grpLabel = grpSelN ? `Groups: ${STATE.grpMode==='include'?'include':'exclude'} ${grpSelN} ▾` : 'Groups: all ▾';
   const ouNote = ouSelN ? `, OU filter: ${STATE.ouMode==='include'?'include only':'exclude'} ${ouSelN} OU${ouSelN>1?'s':''}` : '';
   const grpNote = grpSelN ? `, group filter: ${STATE.grpMode==='include'?'include only':'exclude'} ${grpSelN} group${grpSelN>1?'s':''}` : '';
-  const scopeNote = `Scope = ${fmt(denom)} of ${fmt(M.ad.length)} AD objects (excluded: ${STATE.excludeNonReal?fmt(nNonReal)+' cluster/alias':'none'}${STATE.logonFilter?', plus anything not logged on in '+STATE.logonDays+'d':''}${ouNote}${grpNote}). An agent is “stale” if its last contact is older than the stale threshold.`;
   const scopeCtl = $('#srcBarControls');
-  if(scopeCtl) scopeCtl.innerHTML = `<div class="controls" style="display:contents">
-    <select id="denomSel" class="sub" title="Coverage denominator — enabled-only vs all AD computers"><option value="enabled"${STATE.denom==='enabled'?' selected':''}>Enabled</option><option value="all"${STATE.denom==='all'?' selected':''}>All</option></select>
-    <label class="sub" style="display:flex;align-items:center;gap:5px" title="Real systems only — excludes objects with no OperatingSystem or a cluster service principal name (cluster name objects / aliases)"><input type="checkbox" id="realChk"${STATE.excludeNonReal?' checked':''}> Real</label>
-    <label class="sub" style="display:flex;align-items:center;gap:5px" title="Only count computers that logged on within this many days"><input type="checkbox" id="logonChk"${STATE.logonFilter?' checked':''}> Logon ≤ <input id="logonDays" type="number" min="1" value="${STATE.logonDays}" style="width:56px"> d</label>
-    <label class="sub" style="display:flex;align-items:center;gap:5px" title="An agent is stale if its last contact is older than this">Stale > <input id="staleInp" type="number" min="1" value="${STATE.staleDays}" style="width:56px"> d</label>
+  if(scopeCtl) scopeCtl.innerHTML = `<div class="controls" style="margin-top:10px">
+    <select id="denomSel" class="sub" title="Coverage denominator"><option value="enabled"${STATE.denom==='enabled'?' selected':''}>Enabled AD computers</option><option value="all"${STATE.denom==='all'?' selected':''}>All AD computers</option></select>
+    <label class="sub" style="display:flex;align-items:center;gap:6px" title="Excludes objects with no OperatingSystem or a cluster service principal name (cluster name objects, aliases)"><input type="checkbox" id="realChk"${STATE.excludeNonReal?' checked':''}> Real systems only</label>
+    <label class="sub" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="logonChk"${STATE.logonFilter?' checked':''}> Logged on within <input id="logonDays" type="number" min="1" value="${STATE.logonDays}" style="width:58px"> days</label>
+    <label class="sub">Stale threshold <input id="staleInp" type="number" min="1" value="${STATE.staleDays}" style="width:64px"> days</label>
     ${mselHtml({id:'ou', btnLabel:ouLabel, mode:STATE.ouMode, sel:STATE.ouSel, values:allOus, noun:'OUs'})}
     ${mselHtml({id:'grp', btnLabel:grpLabel, mode:STATE.grpMode, sel:STATE.grpSel, values:allGroups, noun:'groups'})}
-  </div>`;
-  const sb=$('#srcBar'); if(sb) sb.title = scopeNote;   // full scope summary on hover (count is on the AD computers card)
+  </div><div class="sub" style="margin-top:8px">Scope = ${fmt(denom)} of ${fmt(M.ad.length)} AD objects (excluded: ${STATE.excludeNonReal?fmt(nNonReal)+' cluster/alias':'none'}${STATE.logonFilter?', plus anything not logged on in '+STATE.logonDays+'d':''}${ouNote}${grpNote}). An agent is “stale” if its last <em>contact</em> is older than the stale threshold.</div>`;
   $('#denomSel').addEventListener('change',e=>{ STATE.denom=e.target.value; render(); });
   $('#realChk').addEventListener('change',e=>{ STATE.excludeNonReal=e.target.checked; render(); });
   $('#logonChk').addEventListener('change',e=>{ STATE.logonFilter=e.target.checked; render(); });
