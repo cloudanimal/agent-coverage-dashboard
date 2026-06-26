@@ -102,12 +102,14 @@ function slotId(k){ return k==='ten'?'ten':k; }   // ids match
 // enable the Build button once AD + ≥1 agent are loaded — no auto-build, the user clicks Build
 function updateBuildBtn(){ const ready = STATE.ad.length && AKEYS.some(k=>(STATE[k]||[]).length);
   const b=document.getElementById('buildBtn'); if(b) b.disabled=!ready; }
-// collapse the uploader to the source-filter bar after build; expand to edit. The per-source
-// counts live on the filter buttons (populated in render), so there's nothing to fill here.
+// Show/hide the source uploader. Once a dashboard has been built the source bar stays
+// visible (so its 'Sources' button can toggle the editor open/closed).
 function toggleUploader(expand){
   document.getElementById('dropZone').style.display = expand ? '' : 'none';
-  document.getElementById('srcBar').classList.toggle('hidden', !!expand);
+  if(STATE.built) document.getElementById('srcBar').classList.remove('hidden');
 }
+// the 'Sources' button toggles the editor — open it, or auto-close it if already open
+function toggleSources(){ const dz=document.getElementById('dropZone'); dz.style.display = dz.style.display==='none' ? '' : 'none'; }
 
 // ---------- AD JSON → flattened records ----------
 function flattenValue(v){ if(typeof v==='string'){ const m=v.match(/^\/Date\((-?\d+)\)\/$/); if(m) return new Date(+m[1]).toISOString(); } return v; }
