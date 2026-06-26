@@ -220,7 +220,7 @@ function buildDrawer(src){ const body=$('#drawerBody'); if(!body || !STATE._draw
         <label class="sub">Servers / RHEL <input class="hInp" data-profile="server" type="number" min="1" value="${STATE.health.server[src]}" style="width:58px"> days</label>
         <label class="sub">Workstations <input class="hInp" data-profile="workstation" type="number" min="1" value="${STATE.health.workstation[src]}" style="width:58px"> days</label>
       </div>`; }
-  body.innerHTML = `<div class="drawer-head"><h3>${escH(SRC_LABEL[src])} ${isAgent?'validity':'scope'}</h3><button class="drawer-close" id="drawerX" title="Close">✕</button></div>
+  body.innerHTML = `<div class="drawer-head"><h3>${escH(SRC_LABEL[src])} filters</h3><button class="drawer-close" id="drawerX" title="Close">✕</button></div>
     <p class="sub">${intro}</p>
     ${qp.length?`<div class="sub" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:4px">Quick picks: ${qp.map((q,i)=>`<button class="btn qpick" data-q="${i}" style="font-size:11px;padding:3px 9px">${escH(q[0])}</button>`).join('')}</div>`:''}
     <div id="ruleList">${rules.map((r,i)=>ruleRowHtml(r,i,src)).join('')||'<span class="sub">No rules yet.</span>'}</div>
