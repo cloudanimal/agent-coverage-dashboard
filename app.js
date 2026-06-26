@@ -1,7 +1,7 @@
 'use strict';
 // ---------- state ----------
 const STATE = { ad:[], me:[], ten:[], cs:[], adCols:[], src:{}, staleDays:30, denom:'enabled',
-  excludeNonReal:true, logonFilter:true, logonDays:15,
+  excludeNonReal:true, logonFilter:true, logonDays:15, cbTheme:'default',
   // agent health = recency of the last *successful scan* (distinct from last contact). Servers scan daily → tighter.
   scanHealthSrv:2, scanHealthWks:14 };
 const $ = s => document.querySelector(s);
@@ -11,10 +11,42 @@ const showLoading = m => { $('#loadingMsg').textContent=m||'Working…'; $('#loa
 const hideLoading = () => { $('#loading').style.display='none'; };
 const nextPaint = () => new Promise(r=>setTimeout(r,30));
 
+// ---------- colour-blind-safe palettes (parallels the Tenable dashboard) ----------
+// Each mode remaps the agent-identity + state colours to a CB-safe set (per Paul Tol), dark/light tuned.
+const cssvar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const PALS_CB = {
+  deuteranopia: {
+    dark:  {me:'#ee7733', ten:'#0077bb', cs:'#009988', ok:'#009988', warn:'#ee7733', crit:'#cc3311', noscan:'#aa4499', accent:'#0077bb'},
+    light: {me:'#a85f08', ten:'#005a8c', cs:'#00706a', ok:'#00706a', warn:'#a85f08', crit:'#a82a0e', noscan:'#882255', accent:'#005a8c'}
+  },
+  protanopia: {
+    dark:  {me:'#ddaa33', ten:'#4f8fcf', cs:'#44bb99', ok:'#44bb99', warn:'#ddaa33', crit:'#bb5566', noscan:'#aa4499', accent:'#4f8fcf'},
+    light: {me:'#8f6a13', ten:'#003f73', cs:'#0f663a', ok:'#0f663a', warn:'#8f6a13', crit:'#7a3340', noscan:'#882255', accent:'#003f73'}
+  },
+  tritanopia: {
+    dark:  {me:'#f57c00', ten:'#3b8bd0', cs:'#19a3a3', ok:'#19a3a3', warn:'#f57c00', crit:'#ee3377', noscan:'#9a4ec2', accent:'#ee3377'},
+    light: {me:'#bd5800', ten:'#0f5fa8', cs:'#006b67', ok:'#006b67', warn:'#bd5800', crit:'#b0144d', noscan:'#5e1a8a', accent:'#b0144d'}
+  }
+};
+const curMode = () => document.documentElement.dataset.theme==='light' ? 'light' : 'dark';
+function applyPalette(name){
+  STATE.cbTheme = PALS_CB[name] ? name : 'default';
+  const root = document.documentElement.style;
+  ['--me','--ten','--cs','--ok','--warn','--crit','--noscan','--accent'].forEach(k=>root.removeProperty(k));
+  if(STATE.cbTheme!=='default'){ const p=PALS_CB[STATE.cbTheme][curMode()];
+    Object.entries(p).forEach(([k,v])=>root.setProperty('--'+k, v)); }
+  try{ localStorage.setItem('acd-cb', STATE.cbTheme); }catch(e){}
+  const sel=document.getElementById('cbSel'); if(sel) sel.value=STATE.cbTheme;
+  if(STATE.built) render();
+}
+
 // ---------- theme ----------
 (function(){ const s=localStorage.getItem('acd-theme'); if(s) document.documentElement.dataset.theme=s; })();
 $('#themeBtn').addEventListener('click', ()=>{ const d=document.documentElement.dataset.theme==='light'?'dark':'light';
-  document.documentElement.dataset.theme=d; localStorage.setItem('acd-theme',d); if(STATE.built) render(); });
+  document.documentElement.dataset.theme=d; localStorage.setItem('acd-theme',d); applyPalette(STATE.cbTheme); });
+$('#cbSel') && $('#cbSel').addEventListener('change', e=>applyPalette(e.target.value));
+$('#resetBtn') && $('#resetBtn').addEventListener('click', ()=>location.reload());
+applyPalette((function(){ try{ return localStorage.getItem('acd-cb'); }catch(e){ return null; } })() || 'default');
 
 // ---------- file pickers ----------
 function pick(k){ $('#file-'+k).click(); }
@@ -158,7 +190,8 @@ function buildModel(){
 }
 
 // Intune temporarily removed — needs a different inventory-model approach (AD ∪ Intune), to be reintroduced.
-const AGENTS = [ ['me','ManageEngine','#b9770b'], ['ten','Tenable','#003f73'], ['cs','CrowdStrike','#1f9d57'] ];
+// colours are CSS-var names so the colour-blind palette can remap them live
+const AGENTS = [ ['me','ManageEngine','--me'], ['ten','Tenable','--ten'], ['cs','CrowdStrike','--cs'] ];
 const AKEYS = AGENTS.map(a=>a[0]);
 const AGENT_NAME = Object.fromEntries(AGENTS.map(a=>[a[0],a[1]]));
 
@@ -191,12 +224,12 @@ function render(){
   // KPI cards
   const kpi = (l,v,s,col)=>`<div class="card"><div class="l">${l}</div><div class="v"${col?` style="color:${col}"`:''}>${v}</div>${s?`<div class="s">${s}</div>`:''}</div>`;
   let cards = kpi('AD computers', fmt(M.ad.length), `${fmt(denom)} in scope · ${fmt(nNonReal)} cluster/alias`);
-  AGENTS.forEach(([k,label,c])=>{ const n=cov(k); cards += kpi(label+' coverage', pct(n,denom)+'%', `${fmt(n)} / ${fmt(denom)} · ${fmt(stale(k))} stale`, c); });
+  AGENTS.forEach(([k,label,c])=>{ const n=cov(k); cards += kpi(label+' coverage', pct(n,denom)+'%', `${fmt(n)} / ${fmt(denom)} · ${fmt(stale(k))} stale`, `var(${c})`); });
   cards += kpi('Fully covered', pct(fully,denom)+'%', `${fmt(fully)} on all ${AKEYS.length} agents`, 'var(--ok)');
   cards += kpi('No coverage', fmt(none), 'in-scope, 0 agents', none? 'var(--crit)':null);
   cards += kpi('No EDR (CrowdStrike)', fmt(noEdr), pct(noEdr,denom)+'% of in-scope', noEdr? 'var(--crit)':null);
   cards += kpi('Single-agent hosts', fmt(single), `only 1 of ${AKEYS.length} agents`, single? 'var(--warn)':null);
-  cards += kpi('Not scanning', fmt(notScanning), `present but no scan in ${STATE.scanHealthSrv}d srv / ${STATE.scanHealthWks}d wks`, notScanning? '#8b5cf6':null);
+  cards += kpi('Not scanning', fmt(notScanning), `present but no scan in ${STATE.scanHealthSrv}d srv / ${STATE.scanHealthWks}d wks`, notScanning? 'var(--noscan)':null);
   cards += kpi('Orphan agents', fmt(M.orphans.length), 'agents with no AD match', M.orphans.length?'var(--warn)':null);
   d.insertAdjacentHTML('beforeend', `<div class="cards">${cards}</div>`);
 
@@ -252,16 +285,16 @@ function drawAgentChart(inScope, denom){
   const gap     = AGENTS.map(([k])=>inScope.filter(c=>!c.cov[k].present).length);
   CHARTS.push(new Chart($('#cAgent'),{type:'bar',
     data:{labels:AGENTS.map(a=>a[1]),datasets:[
-      {label:'Covered',data:covered,backgroundColor:'#1f9d57'},
-      {label:'Stale',data:staleA,backgroundColor:'#b9770b'},
-      {label:'Gap',data:gap,backgroundColor:'#7a3340'} ]},
+      {label:'Covered',data:covered,backgroundColor:cssvar('--ok')},
+      {label:'Stale',data:staleA,backgroundColor:cssvar('--warn')},
+      {label:'Gap',data:gap,backgroundColor:cssvar('--crit')} ]},
     options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:chartTick()}}},
       scales:{x:{stacked:true,grid:{display:false},ticks:{color:chartTick()}},y:{stacked:true,grid:{color:chartGrid()},ticks:{color:chartTick()}}}}}));
 }
 function drawSegChart(inScope){
   const segs=[...new Set(inScope.map(c=>c.seg))].sort();
   CHARTS.push(new Chart($('#cSeg'),{type:'bar',
-    data:{labels:segs,datasets:AGENTS.map(([k,label,col])=>({label,backgroundColor:col,
+    data:{labels:segs,datasets:AGENTS.map(([k,label,col])=>({label,backgroundColor:cssvar(col),
       data:segs.map(s=>{ const rows=inScope.filter(c=>c.seg===s); return pct(rows.filter(c=>c.cov[k].present).length, rows.length); }) }))},
     options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:chartTick()}},tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.parsed.y+'%'}}},
       scales:{x:{grid:{display:false},ticks:{color:chartTick()}},y:{max:100,grid:{color:chartGrid()},ticks:{color:chartTick(),callback:v=>v+'%'}}}}}));
@@ -270,7 +303,7 @@ function drawTypeChart(inScope){
   const order=['Windows Server','Windows Workstation','RHEL','Other'];
   const types=order.filter(t=>inScope.some(c=>c.type===t));
   CHARTS.push(new Chart($('#cType'),{type:'bar',
-    data:{labels:types,datasets:AGENTS.map(([k,label,col])=>({label,backgroundColor:col,
+    data:{labels:types,datasets:AGENTS.map(([k,label,col])=>({label,backgroundColor:cssvar(col),
       data:types.map(t=>{ const rows=inScope.filter(c=>c.type===t); return pct(rows.filter(c=>c.cov[k].present).length, rows.length); }) }))},
     options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:chartTick()}},tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.parsed.y+'%'}}},
       scales:{x:{grid:{display:false},ticks:{color:chartTick()}},y:{max:100,grid:{color:chartGrid()},ticks:{color:chartTick(),callback:v=>v+'%'}}}}}));
@@ -278,7 +311,7 @@ function drawTypeChart(inScope){
 function drawDepthChart(inScope){
   const N=AKEYS.length; const labels=[]; const data=[]; const colors=[];
   for(let i=0;i<=N;i++){ labels.push(i+(i===1?' agent':' agents')); data.push(inScope.filter(c=>c.nAgents===i).length);
-    colors.push(i===0?'#7a3340':i===N?'#1f9d57':i===1?'#b9770b':'#378add'); }
+    colors.push(i===0?cssvar('--crit'):i===N?cssvar('--ok'):i===1?cssvar('--warn'):cssvar('--accent')); }
   CHARTS.push(new Chart($('#cDepth'),{type:'bar',
     data:{labels,datasets:[{label:'Hosts',data,backgroundColor:colors}]},
     options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>fmt(c.parsed.y)+' hosts'}}},
@@ -306,7 +339,7 @@ function buildMatrix(M, inScope){
       <select id="mxType"><option value="">All types</option>${types.map(t=>`<option>${t}</option>`).join('')}</select>
       <span class="sub" id="mxCount"></span>
     </div>
-    <div class="legend"><span><span class="sw" style="background:#1f9d57"></span>Covered</span><span><span class="sw" style="background:#b9770b"></span>Stale contact (&gt;${STATE.staleDays}d)</span><span><span class="sw" style="background:#8b5cf6"></span>No scan (&gt;${STATE.scanHealthSrv}d srv/${STATE.scanHealthWks}d wks)</span><span><span class="sw" style="background:#7a3340"></span>Gap</span></div>
+    <div class="legend"><span><span class="sw" style="background:var(--ok)"></span>Covered</span><span><span class="sw" style="background:var(--warn)"></span>Stale contact (&gt;${STATE.staleDays}d)</span><span><span class="sw" style="background:var(--noscan)"></span>No scan (&gt;${STATE.scanHealthSrv}d srv/${STATE.scanHealthWks}d wks)</span><span><span class="sw" style="background:var(--crit)"></span>Gap</span></div>
     <div class="scrollwrap"><table><thead><tr>
       <th data-s="name">Computer</th><th data-s="seg">Segment</th><th data-s="os">OS</th><th data-s="type">Type</th><th data-s="enabled">Enabled</th>
       ${AGENTS.map(a=>`<th data-s="cov:${a[0]}">${a[1]}</th>`).join('')}<th class="num" data-s="nAgents">Agents</th>
