@@ -400,6 +400,10 @@ function render(){
   const unhealthy = inScope.reduce((n,c)=>n+AKEYS.filter(k=>agentState(c,k)==='unhealthy').length,0);
   const invalidN  = inScope.reduce((n,c)=>n+AKEYS.filter(k=>agentState(c,k)==='invalid').length,0);
   const anyAgentRules = AKEYS.some(k=>activeRuleCount(k));
+  // newly-created servers (AD whenCreated within 30 days) — often the reason for fresh coverage gaps
+  const createdCol = findCol(STATE.adCols,[/whencreated/i,/created/i]);
+  const isServerType = t => t==='Windows Server' || t==='RHEL';
+  const newServers = createdCol ? inScope.filter(c=>{ if(!isServerType(c.type)) return false; const d=daysSince(c.raw[createdCol]); return d!=null && d<=30; }).length : null;
   // patch coverage from ManageEngine patch data (per-agent health is computed inline in the cards)
   const meCols = unionCols(STATE.me||[]);
   const missCol = findCol(meCols,[/missing.?ms.?patch/i,/missing.?patch/i]);
@@ -427,6 +431,7 @@ function render(){
   cards += kpi('No coverage', fmt(none), 'in-scope, 0 agents', none? 'var(--crit)':null);
   cards += kpi('No EDR (CrowdStrike)', fmt(noEdr), pct(noEdr,denom)+'% of in-scope', noEdr? 'var(--crit)':null);
   cards += kpi('Single-agent hosts', fmt(single), `only 1 of ${AKEYS.length} agents`, single? 'var(--warn)':null);
+  if(newServers!=null) cards += kpi('New servers (30d)', fmt(newServers), 'servers created in the last 30 days', newServers? 'var(--accent)':null);
   cards += kpi('Unhealthy agents', fmt(unhealthy), `present but scan / check-in past threshold`, unhealthy? 'var(--noscan)':null);
   if(anyAgentRules) cards += kpi('Invalid agents', fmt(invalidN), `present but failing a source validity rule`, invalidN? 'var(--high)':null);
   cards += kpi('Orphan agents', fmt(M.orphans.length), 'agents with no AD match', M.orphans.length?'var(--warn)':null);

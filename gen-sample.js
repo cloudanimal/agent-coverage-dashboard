@@ -40,8 +40,9 @@ const real = src.map(s=>{
   else if(r<0.70) logonDays = rnd()*15;
   else if(r<0.90) logonDays = 15 + rnd()*75;
   else logonDays = 90 + rnd()*310;
-  return { name, dns:s.dns, ip:s.ip, os:s.os, seg, type, enabled, logon:daysAgoMs(logonDays),
-    created:daysAgoMs(120+rnd()*1500), real:true };
+  // ~3% of systems were created in the last 30 days (newly-built hosts that may not have agents yet)
+  const created = rnd()<0.03 ? daysAgoMs(rnd()*30) : daysAgoMs(120+rnd()*1500);
+  return { name, dns:s.dns, ip:s.ip, os:s.os, seg, type, enabled, logon:daysAgoMs(logonDays), created, real:true };
 });
 
 // ---- cluster/alias objects (CNOs/VCOs): no OS, cluster SPNs — should be filtered out as "not real systems" ----
