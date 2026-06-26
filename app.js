@@ -187,10 +187,16 @@ function quickPicks(src){ const f=pats=>findCol(srcCols(src),pats);
          ['Exclude “decom” (Description)', f([/description/i]),'exclude','contains','decom'],
          ['Exclude stale password >60d', f([/passwordlastset|pwdlastset/i]),'exclude','older','60'],
          ['Servers only (OS)', f([/operatingsystem$/i,/^os$/i]),'include','contains','server'] ],
+    me:[ ['Invalid if Health = Vulnerable', f([/health.?status/i]),'exclude','contains','Vulnerable'],
+         ['Invalid if resource down', f([/resource.?live/i]),'exclude','contains','DOWN'],
+         ['Invalid if reboot required', f([/reboot.?status/i,/reboot/i]),'exclude','eq','Required'],
+         ['Invalid if deployment failed', f([/deployment.?status/i,/deployment/i]),'exclude','contains','Failed'] ],
+    ten:[ ['Invalid if restart pending', f([/restartpending|reboot/i]),'exclude','true',''],
+          ['Invalid if last scan >7d', f([/lastscannedutc|last.?scan/i]),'exclude','older','7'],
+          ['Invalid if no AgentId', f([/agent.?id/i]),'exclude','empty',''] ],
     cs:[ ['Invalid if Reduced Functionality Mode', f([/status/i,/rfm/i,/reduced/i]),'exclude','contains','Reduced'],
-         ['Invalid if Contained', f([/status/i]),'exclude','contains','Contained'] ],
-    me:[ ['Invalid if Health = Vulnerable', f([/health.?status/i]),'exclude','contains','Vulnerable'] ],
-    ten:[ ['Invalid if restart pending', f([/restartpending|reboot/i]),'exclude','contains','True'] ],
+         ['Invalid if Contained', f([/status/i]),'exclude','contains','Contained'],
+         ['Invalid if sensor < 7.32', f([/sensor.?version/i]),'exclude','regex','^7\\.3[01]\\.'] ],
   };
   return (Q[src]||[]).filter(q=>q[1]); }
 function ruleRowHtml(rule,i,src){ const cols=srcCols(src); const t=rule.field?adFieldType(rule.field,src):'text'; const ops=AD_OPS[t];
