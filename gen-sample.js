@@ -143,6 +143,31 @@ function meRow(c, { stale, contactMs, installMs }){
 // Real export order. 'Total TP Patches' intentionally appears twice — that duplicate column is in the real ManageEngine CSV.
 const ME_COLS = ['computer_name','full_name','fqdn_name','Custom_group_name','domain_name','agent_version','Last_Contact_Time','Last_Bootup_Time','Agent_Installed_on','Agent_Upgraded_on','Agent_Executed_on','Last Patched Time','Last Successful Scan','IP_Address','Mac_Address','OS_Name','OS_Version','Service_Pack','OS Platform Name','Agent_installed_dir','Branch_Office_Name','Logged_on_User','Total Driver Patches','Missing BIOS Patches','Total TP Patches','Missing MS Patches','Important Patch Count','Missing Driver Patches','Total MS Patches','Installed MS Patches','Low Patch Count','Total TP Patches','Installed TP Patches','Critical Patch Count','Installed BIOS Patches','Total BIOS Patches','Installed Driver Patches','MODERATE Patch Count','Deployment Status','Location','Resource Live Status','Reboot Status','Health Status','Owner','Scan Status','Scan Remarks','Customer Name'];
 
+// ---- CrowdStrike Falcon host export real schema (Hostname, IP address history, OS version, Sensor version, Manufacturer, Last seen) ----
+// Real exports may carry many more columns; the app finds these by fuzzy header match and ignores the rest.
+const isoZ = ms => new Date(ms).toISOString().replace(/\.\d{3}Z$/,'Z');     // CrowdStrike timestamps have no millis
+const MANUF = [['VMware, Inc.',0.55],['Microsoft Corporation',0.25],['Dell Inc.',0.12],['HPE',0.08]];
+const manuf = () => { let r=rnd(),a=0; for(const [m,w] of MANUF){ a+=w; if(r<a) return m; } return 'VMware, Inc.'; };
+function csOs(os){ const s=os||'';
+  if(/2012 r2/i.test(s)) return 'Windows Server 2012 R2';
+  let m=s.match(/server (20\d\d)/i); if(m) return 'Windows Server '+m[1];
+  if(/windows 11/i.test(s)) return 'Windows 11'; if(/windows 10/i.test(s)) return 'Windows 10';
+  if(/red hat|rhel|linux/i.test(s)){ m=s.match(/(\d+(?:\.\d+)?)/); return 'RHEL '+(m?m[1]:'8.10'); }
+  return s || 'Windows Server 2019';
+}
+function csRow(c, { contactMs }){
+  const ip2 = `10.${1+Math.floor(rnd()*20)}.${Math.floor(rnd()*255)}.${1+Math.floor(rnd()*254)}`;
+  return {
+    Hostname: (rnd()<0.18 && c.dns) ? c.dns.toUpperCase() : c.name,        // ~18% FQDN to exercise hostname normalization
+    'IP address history': (rnd()<0.2 && c.ip) ? `${c.ip}, ${ip2}` : (c.ip || `100.${64+Math.floor(rnd()*40)}.${Math.floor(rnd()*255)}.${1+Math.floor(rnd()*254)}`),
+    'OS version': csOs(c.os),
+    'Sensor version': `7.${30+Math.floor(rnd()*12)}.${19000+Math.floor(rnd()*2000)}.0`,
+    Manufacturer: manuf(),
+    'Last seen': isoZ(contactMs),
+  };
+}
+const CS_COLS = ['Hostname','IP address history','OS version','Sensor version','Manufacturer','Last seen'];
+
 // ---- agent sources (subsets of REAL systems) + orphans ----
 const me=[], ten=[], cs=[];
 real.forEach(c=>{
@@ -151,22 +176,18 @@ real.forEach(c=>{
     AgentId:[...Array(32)].map(()=>'0123456789abcdef'[Math.floor(rnd()*16)]).join(''),
     Groups:`${c.seg}-Agents`, LastConnectUtc:iso(daysAgoMs(stale?30+rnd()*90:rnd()*2)),
     LastScannedUtc:iso(daysAgoMs(stale?40+rnd()*90:(rnd()<0.15?3+rnd()*37:rnd()*1.5))), RestartPending: rnd()<0.05?'True':'False' }); }
-  if(has(c,0.83)){ const rfm=rnd()<0.04; cs.push({ Hostname:c.name,
-    'Sensor Version':`7.${14+Math.floor(rnd()*6)}.${17000+Math.floor(rnd()*900)}`,
-    'Last Seen':iso(daysAgoMs(rnd()<0.06?30+rnd()*60:rnd()*2)), 'First Seen':iso(daysAgoMs(60+rnd()*1000)),
-    'OS Version':c.os, Platform: c.os.includes('Linux')?'Linux':'Windows',
-    Status: rfm?'Reduced Functionality Mode':(rnd()<0.01?'Contained':'Normal'),
-    'OU':`${c.seg}/${c.type}s`, 'Device ID':[...Array(32)].map(()=>'0123456789abcdef'[Math.floor(rnd()*16)]).join('') }); }
+  if(has(c,0.83)){ cs.push(csRow(c,{ contactMs:daysAgoMs(rnd()<0.06?30+rnd()*60:rnd()*2) })); }
 });
 for(let i=0;i<40;i++){ const nm=`OLD-PC${pad(i,3)}`;
   me.push(meRow({ name:nm, dns:`${nm.toLowerCase()}.corp.local`, ip:'', os:'Windows Server 2012 R2 Standard', seg:'DECOM', type:'Server' },
     { stale:true, contactMs:daysAgoMs(90+rnd()*200), installMs:daysAgoMs(400+rnd()*400) })); }
 for(let i=0;i<30;i++) ten.push({ Hostname:`LAB-TEST${pad(i,3)}`,AgentId:'ff00ff00ff00ff00ff00ff00ff00ff00',Groups:'Lab-Agents',LastConnectUtc:iso(daysAgoMs(rnd()*5)),LastScannedUtc:iso(daysAgoMs(rnd()*10)),RestartPending:'False' });
-for(let i=0;i<24;i++) cs.push({ Hostname:`BYOD-LT${pad(i,3)}`,'Sensor Version':'7.19.17888','Last Seen':iso(daysAgoMs(rnd()*3)),'First Seen':iso(daysAgoMs(30+rnd()*200)),'OS Version':'Windows 11 Pro',Platform:'Windows',Status:'Normal','OU':'Unmanaged','Device ID':'aa11bb22cc33dd44ee55ff66aa77bb88' });
+for(let i=0;i<24;i++){ const nm=`BYOD-LT${pad(i,3)}`;
+  cs.push(csRow({ name:nm, dns:`${nm.toLowerCase()}.archgroup.io`, ip:`100.81.${Math.floor(rnd()*255)}.${1+Math.floor(rnd()*254)}`, os:'Windows 11 Pro' }, { contactMs:daysAgoMs(rnd()*3) })); }
 
 fs.writeFileSync(path.join(OUT,'manageengine.csv'), csv(me, ME_COLS));
 fs.writeFileSync(path.join(OUT,'tenable-agents.csv'), csv(ten, ['Hostname','AgentId','Groups','LastConnectUtc','LastScannedUtc','RestartPending']));
-fs.writeFileSync(path.join(OUT,'crowdstrike.csv'), csv(cs, ['Hostname','Sensor Version','Last Seen','First Seen','OS Version','Platform','Status','OU','Device ID']));
+fs.writeFileSync(path.join(OUT,'crowdstrike.csv'), csv(cs, CS_COLS));
 
 const within15 = real.filter(c=>c.enabled && (Date.now()-c.logon)/86400000<=15).length;
 console.log(`real=${real.length} clusters=${clusters.length} | enabled=${real.filter(c=>c.enabled).length} loggedIn<=15d=${within15} | ME=${me.length} Tenable=${ten.length} CS=${cs.length}`);
