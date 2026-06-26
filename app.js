@@ -400,6 +400,17 @@ function render(){
   const unhealthy = inScope.reduce((n,c)=>n+AKEYS.filter(k=>agentState(c,k)==='unhealthy').length,0);
   const invalidN  = inScope.reduce((n,c)=>n+AKEYS.filter(k=>agentState(c,k)==='invalid').length,0);
   const anyAgentRules = AKEYS.some(k=>activeRuleCount(k));
+  // rollups: agent health = healthy share of present agents; patch coverage from ManageEngine patch data
+  const presentInst = inScope.reduce((n,c)=>n+AKEYS.filter(k=>c.cov[k].present).length,0);
+  const healthyInst = inScope.reduce((n,c)=>n+AKEYS.filter(k=>agentState(c,k)==='healthy').length,0);
+  const meCols = unionCols(STATE.me||[]);
+  const missCol = findCol(meCols,[/missing.?ms.?patch/i,/missing.?patch/i]);
+  const meHealthCol = findCol(meCols,[/health.?status/i]);
+  let patched=0, patchKnown=0;
+  inScope.forEach(c=>{ if(!c.cov.me.present) return; const r=c.cov.me.rec; let p=null;
+    if(missCol && r[missCol]!=null && r[missCol]!=='') p = Number(r[missCol])===0;
+    else if(meHealthCol && r[meHealthCol]) p = !/vulnerable/i.test(String(r[meHealthCol]));
+    if(p!=null){ patchKnown++; if(p) patched++; } });
 
   const d = $('#dashboard'); d.innerHTML='';
   if(!STATE.built) window.scrollTo({top:0});   // only jump to top on the first build, not on filter re-renders
@@ -409,7 +420,9 @@ function render(){
   let cards = kpi('AD computers', fmt(M.ad.length), `${fmt(denom)} in scope · ${fmt(nNonReal)} cluster/alias`);
   AGENTS.forEach(([k,label,c])=>{ const n=cov(k); const inv=inScope.filter(x=>agentState(x,k)==='invalid').length;
     cards += kpi(label+' coverage', pct(n,denom)+'%', `${fmt(n)} / ${fmt(denom)} · ${fmt(stale(k))} stale${inv?` · ${fmt(inv)} invalid`:''}`, `var(${c})`); });
-  cards += kpi('Fully covered', pct(fully,denom)+'%', `${fmt(fully)} on all ${AKEYS.length} agents`, 'var(--ok)');
+  cards += kpi('Agent coverage', pct(fully,denom)+'%', `fully covered · ${fmt(fully)} on all ${AKEYS.length} agents`, 'var(--ok)');
+  cards += kpi('Agent health', presentInst? pct(healthyInst,presentInst)+'%':'—', `${fmt(healthyInst)} / ${fmt(presentInst)} present agents healthy`, presentInst&&pct(healthyInst,presentInst)<90?'var(--warn)':'var(--ok)');
+  cards += kpi('Patch coverage', patchKnown? pct(patched,patchKnown)+'%':'—', patchKnown? `${fmt(patched)} / ${fmt(patchKnown)} ManageEngine hosts fully patched` : 'no ManageEngine patch data', patchKnown? (pct(patched,patchKnown)<90?'var(--warn)':'var(--ok)') : null);
   cards += kpi('No coverage', fmt(none), 'in-scope, 0 agents', none? 'var(--crit)':null);
   cards += kpi('No EDR (CrowdStrike)', fmt(noEdr), pct(noEdr,denom)+'% of in-scope', noEdr? 'var(--crit)':null);
   cards += kpi('Single-agent hosts', fmt(single), `only 1 of ${AKEYS.length} agents`, single? 'var(--warn)':null);
