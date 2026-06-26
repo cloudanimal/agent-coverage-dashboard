@@ -383,7 +383,7 @@ function render(){
   const allOus=[...new Set(M.ad.map(c=>c.ou))].filter(Boolean).sort();
   const ouSelN=STATE.ouSel.size;
   const ouBtnLabel=ouSelN ? `OUs: ${STATE.ouMode==='include'?'include':'exclude'} ${ouSelN} ▾` : 'OUs: all ▾';
-  const ouChecks=allOus.map(o=>`<label><input type="checkbox" class="ouChk" value="${escH(o)}"${STATE.ouSel.has(o)?' checked':''}> ${escH(o)}</label>`).join('');
+  const ouChecks=allOus.map(o=>`<label title="${escH(o)}"><input type="checkbox" class="ouChk" value="${escH(o)}"${STATE.ouSel.has(o)?' checked':''}> <span>${escH(o)}</span></label>`).join('');
   const ouNote = ouSelN ? `, OU filter: ${STATE.ouMode==='include'?'include only':'exclude'} ${ouSelN} OU${ouSelN>1?'s':''}` : '';
   d.insertAdjacentHTML('beforeend', `<div class="panel"><div class="controls">
     <label class="sub">Coverage denominator
@@ -398,7 +398,9 @@ function render(){
           <span class="modes"><label><input type="radio" name="ouMode" value="include"${STATE.ouMode==='include'?' checked':''}> Include only</label><label><input type="radio" name="ouMode" value="exclude"${STATE.ouMode==='exclude'?' checked':''}> Exclude</label></span>
           <span><a id="ouAll">All</a> · <a id="ouNone">None</a></span>
         </div>
+        <input id="ouSearch" placeholder="Filter ${allOus.length} OUs…" style="width:100%;margin-bottom:6px" autocomplete="off">
         <div class="msel-list" id="ouList">${ouChecks||'<span class="sub">No OUs</span>'}</div>
+        <div class="sub" id="ouCount" style="margin-top:6px"></div>
       </div>
     </div>
   </div><div class="sub">Scope = ${fmt(denom)} of ${fmt(M.ad.length)} AD objects (excluded: ${STATE.excludeNonReal?fmt(nNonReal)+' cluster/alias':'none'}${STATE.logonFilter?', plus anything not logged on in '+STATE.logonDays+'d':''}${ouNote}). An agent is “stale” if its last <em>contact</em> is older than the stale threshold.</div></div>`);
@@ -407,15 +409,20 @@ function render(){
   $('#logonChk').addEventListener('change',e=>{ STATE.logonFilter=e.target.checked; render(); });
   $('#logonDays').addEventListener('change',e=>{ STATE.logonDays=Math.max(1,parseInt(e.target.value)||15); render(); });
   $('#staleInp').addEventListener('change',e=>{ STATE.staleDays=Math.max(1,parseInt(e.target.value)||30); render(); });
-  // OU scope multi-select: toggle items freely, apply (re-render) once the popover closes
+  // OU scope multi-select: searchable, toggle items freely, apply (re-render) once the popover closes
   (function(){ const wrap=$('#ouScope'), btn=$('#ouScopeBtn'), pop=$('#ouScopePop'); let dirty=false;
+    const labels=()=>[...$('#ouList').querySelectorAll('label')];
+    const visibleChecks=()=>labels().filter(l=>l.style.display!=='none').map(l=>l.querySelector('.ouChk'));
+    function updCount(){ const vis=labels().filter(l=>l.style.display!=='none').length; $('#ouCount').textContent=`${STATE.ouSel.size} selected · ${vis} of ${allOus.length} shown`; }
     function outside(e){ if(!wrap.contains(e.target)) close(); }
     function close(){ if(pop.hidden) return; pop.hidden=true; document.removeEventListener('click',outside,true); if(dirty){ dirty=false; render(); } }
-    btn.addEventListener('click',e=>{ e.stopPropagation(); if(pop.hidden){ pop.hidden=false; setTimeout(()=>document.addEventListener('click',outside,true),0); } else close(); });
-    $('#ouList').addEventListener('change',e=>{ if(!e.target.classList.contains('ouChk'))return; const v=e.target.value; if(e.target.checked)STATE.ouSel.add(v); else STATE.ouSel.delete(v); dirty=true; });
+    btn.addEventListener('click',e=>{ e.stopPropagation(); if(pop.hidden){ pop.hidden=false; updCount(); setTimeout(()=>{document.addEventListener('click',outside,true); $('#ouSearch').focus();},0); } else close(); });
+    $('#ouSearch').addEventListener('input',e=>{ const q=e.target.value.trim().toLowerCase();
+      labels().forEach(l=>{ l.style.display = (!q || l.textContent.toLowerCase().includes(q)) ? '' : 'none'; }); updCount(); });
+    $('#ouList').addEventListener('change',e=>{ if(!e.target.classList.contains('ouChk'))return; const v=e.target.value; if(e.target.checked)STATE.ouSel.add(v); else STATE.ouSel.delete(v); dirty=true; updCount(); });
     pop.querySelectorAll('input[name=ouMode]').forEach(r=>r.addEventListener('change',e=>{ STATE.ouMode=e.target.value; dirty=true; }));
-    $('#ouAll').addEventListener('click',()=>{ allOus.forEach(o=>STATE.ouSel.add(o)); $('#ouList').querySelectorAll('.ouChk').forEach(c=>c.checked=true); dirty=true; });
-    $('#ouNone').addEventListener('click',()=>{ STATE.ouSel.clear(); $('#ouList').querySelectorAll('.ouChk').forEach(c=>c.checked=false); dirty=true; });
+    $('#ouAll').addEventListener('click',()=>{ visibleChecks().forEach(c=>{ c.checked=true; STATE.ouSel.add(c.value); }); dirty=true; updCount(); });
+    $('#ouNone').addEventListener('click',()=>{ visibleChecks().forEach(c=>{ c.checked=false; STATE.ouSel.delete(c.value); }); dirty=true; updCount(); });
   })();
 
   // ---- per-source filter toolbar (opens slide-out drawers) ----
