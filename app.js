@@ -787,7 +787,7 @@ function reportMarkdown(stamp){ const ad=STATE._inScope||[]; const denom=ad.leng
 function buildExportMenu(){ const sel=$('#exportSel'); if(!sel) return;
   sel.innerHTML = [
     ['report-html','Full report (HTML)'],['report-pdf','Full report (PDF / print)'],
-    ['full-csv','Full report (CSV)'],['full-xlsx','Full report (XLSX)'],
+    ['full-csv','Full report (CSV)'],['full-xlsx','Full report (XLSX)'],['full-json','Full report (JSON)'],
     ['full-csv-clip','Full report (CSV → clipboard)'],['full-tsv-clip','Full report (Excel paste → clipboard)'],['full-img-clip','Full report (image → clipboard)'],
     ['exec-md','Executive report (Markdown)'],
     ['matrix-csv','Coverage matrix (CSV)'],['gaps-csv','Coverage gaps (CSV)'],['orphans-csv','Orphan agents (CSV)'],
@@ -807,6 +807,15 @@ $('#exportBtn').addEventListener('click', ()=>{
     const c=objCols(gaps); dl(`coverage_gaps_${stamp}.csv`, toCsv(c, objRows(gaps,c)), 'text/csv'); return; }
   if(kind==='orphans-csv'){ const o=STATE._M.orphans; const c=['host','source','seen']; dl(`orphan_agents_${stamp}.csv`, toCsv(c, o.map(x=>[x.host,x.source,x.seen])), 'text/csv'); return; }
   if(kind==='metrics-json'){ dl(`agent_coverage_metrics_${stamp}.json`, JSON.stringify(Object.fromEntries(summaryAoa().slice(1)), null, 2), 'application/json'); return; }
+  if(kind==='full-json'){
+    const aoaToObjs=aoa=>{ const [head,...rows]=aoa||[[]]; return rows.map(r=>Object.fromEntries((head||[]).map((h,i)=>[h,r[i]==null?'':r[i]]))); };
+    const out={ generated:new Date().toISOString(), tool:'Agent Coverage Dashboard',
+      sources:{...STATE.src}, source_rows:{ ad:STATE.ad.length, ...Object.fromEntries(AKEYS.map(k=>[k,(STATE[k]||[]).length])) },
+      settings:{ denominator:STATE.denom, staleDays:STATE.staleDays, realSystemsOnly:STATE.excludeNonReal, logonFilter:STATE.logonFilter, logonDays:STATE.logonDays,
+        health:STATE.health, ouFilter:{mode:STATE.ouMode,values:[...STATE.ouSel]}, groupFilter:{mode:STATE.grpMode,values:[...STATE.grpSel]},
+        filters:Object.fromEntries(['ad',...AKEYS].map(s=>[s,(STATE.srcFilters[s]||[]).filter(r=>ruleActive(r,s))])) },
+      sections:Object.fromEntries(reportSections().map(s=>[s.name, aoaToObjs(s.aoa)])) };
+    dl(`agent_coverage_full_${stamp}.json`, JSON.stringify(out, null, 2), 'application/json'); return; }
   if(kind==='full-csv'){ const parts=reportSections().map(s=>`# ${s.name}\n`+toCsv(s.aoa[0]||[], s.aoa.slice(1))); dl(`agent_coverage_full_${stamp}.csv`, parts.join('\n\n\n'), 'text/csv'); return; }
   if(kind==='full-csv-clip'){ const txt=reportSections().map(s=>`# ${s.name}\n`+toCsv(s.aoa[0]||[], s.aoa.slice(1))).join('\n\n\n'); copyTable(txt, 'Full report CSV copied to clipboard'); return; }
   if(kind==='full-tsv-clip'){ const secs=reportSections(); const cell=c=>String(c==null?'':c).replace(/[\t\r\n]+/g,' ');
